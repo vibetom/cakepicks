@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 from core import board as board_mod
 from core import gate as gate_mod
 from core import odds as odds_mod
+from core import pickem as pickem_mod
 from core import scoring
 from core import slip as slip_mod
 from core import snapshots
@@ -523,21 +524,74 @@ else:
             f"{summary['implied_probability']:.2%} (vig included)."
         )
 
-    status = slip_mod.link_status(legs)
-    if status["url"]:
-        st.success(
-            f"One link that loads all {len(legs)} legs onto a FanDuel betslip."
-        )
-        st.link_button("🔗 Open this parlay on FanDuel", status["url"], type="primary")
-        st.caption("Or copy this and send it to whoever is placing the bet:")
-        st.code(status["url"], language=None)
-    else:
-        st.warning(status["reason"])
-        if status["missing"]:
-            st.caption("Legs without IDs: " + ", ".join(status["missing"]))
+    st.subheader("Where to place it")
+    fanduel_tab, pickem_tab = st.tabs(["FanDuel", "PrizePicks / pick'em"])
 
-    st.caption("Share block:")
-    st.code(slip_mod.share_text(legs, summary, status["url"]), language=None)
+    status = slip_mod.link_status(legs)
+    with fanduel_tab:
+        if status["url"]:
+            st.success(
+                f"One link that loads all {len(legs)} legs onto a FanDuel betslip."
+            )
+            st.link_button("🔗 Open this parlay on FanDuel", status["url"],
+                           type="primary")
+            st.caption("Or copy this and send it to whoever is placing the bet:")
+            st.code(status["url"], language=None)
+        else:
+            st.warning(status["reason"])
+            if status["missing"]:
+                st.caption("Legs without IDs: " + ", ".join(status["missing"]))
+        st.caption("Share block:")
+        st.code(slip_mod.share_text(legs, summary, status["url"]), language=None)
+
+    with pickem_tab:
+        st.caption(
+            "Pick'em apps have no price on a single selection — the payout is a "
+            "fixed multiplier for the whole slip — so the odds don't travel. "
+            "The player, stat and line do."
+        )
+        pickem = pickem_mod.combined(legs)
+        if pickem["probability"] is not None:
+            columns = st.columns(3)
+            columns[0].metric("All legs land together",
+                              f"{pickem['probability']:.1%}")
+            columns[1].metric("Payout must beat",
+                              f"{pickem['breakeven_multiplier']:.2f}x",
+                              help="A pick'em multiplier above this is profitable "
+                                   "if these hit rates hold.")
+            columns[2].metric("Legs", pickem["legs"])
+            if pickem["from_price"]:
+                st.info(
+                    f"**That is the market's view, not ours.** "
+                    f"{pickem['from_price']} of {pickem['legs']} legs are yardage "
+                    "props, which have no Poisson model, so their hit rate comes "
+                    "from FanDuel's price. Your projections are claiming those "
+                    "lines land *more* often than the price implies — that "
+                    "disagreement is the bet. Read the figure as the bar to "
+                    "clear, not as a forecast. "
+                    + (f"{pickem['modelled']} leg(s) do use the model."
+                       if pickem["modelled"] else "")
+                )
+
+        st.markdown("**Check the lines before you enter them**")
+        st.caption(
+            "Pick'em lines are usually close to a sportsbook's but not identical. "
+            "*Room* is how far the projection sits above the line here — if the "
+            "app's line is higher than that room, the play no longer stands."
+        )
+        comparison = pd.DataFrame(pickem_mod.line_comparison(legs))
+        st.dataframe(
+            comparison, width="stretch", hide_index=True,
+            column_config={
+                "FanDuel line": st.column_config.NumberColumn(format="%.1f"),
+                "Our projection": st.column_config.NumberColumn(format="%.1f"),
+                "Room": st.column_config.NumberColumn(
+                    format="%+.1f", help="Projection minus the FanDuel line"),
+            },
+        )
+
+        st.caption("Copy this into the app:")
+        st.code(pickem_mod.slip_text(legs), language=None)
 
     if st.button("🗑️ Clear the slip"):
         st.session_state.slip_keys = []

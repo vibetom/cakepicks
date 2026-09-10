@@ -407,6 +407,29 @@ It does not touch `app.py`, and its settings are stored separately
 
 Running it locally is `streamlit run props.py`.
 
+### Placing a slip somewhere other than FanDuel
+
+The slip has a **PrizePicks / pick'em** tab. Odds come from FanDuel either way —
+that is the only feed the app reads — but a pick'em app doesn't price individual
+selections, so what travels there is the player, the stat and the line.
+
+The tab gives you those as a copyable block, plus two things you need before
+entering them:
+
+- **A line-comparison table.** *Room* is how far the projection sits above
+  FanDuel's line. Pick'em lines are close but rarely identical, so if the app
+  shows a higher line than that room, the play no longer stands.
+- **"All legs land together" and "Payout must beat".** A pick'em slip pays a
+  fixed multiplier, so what matters is how often every leg lands, and whether
+  the multiplier beats `1 ÷ that`.
+
+**Read that percentage carefully.** Receptions and touchdown props have a real
+Poisson probability. Yardage props do not — yards are not Poisson — so their
+figure comes from FanDuel's price, which is *the market's* opinion. Since this
+whole app exists to find lines the projections beat, a price-derived figure is
+the bar you are trying to clear, not a forecast of how often these land. The tab
+says which legs are which.
+
 ### Password-protecting it
 
 Streamlit's free tier allows only one private app, so if the parlay bot is
