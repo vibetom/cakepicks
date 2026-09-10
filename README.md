@@ -369,6 +369,46 @@ silently drops legs is worse than no link at all. Missing IDs usually mean a
 market was posted late; refetching odds normally fixes it. The per-leg links in
 the results table remain as a fallback.
 
+---
+
+## The Prop Finder — a second app in this repo
+
+`props.py` is a separate app that answers a different question: **what are the
+best plays on the whole slate**, with no fantasy league involved. It shares
+everything below the UI with the parlay bot — the same scoring, the same name
+matching, the same price limits, and **the same stored odds snapshot**, so a
+slate fetched by either app costs the other nothing.
+
+It does not touch `app.py`, and its settings are stored separately
+(`props_config.json`), so tuning one never disturbs the other.
+
+**What's different:**
+
+- No ESPN league. Every player PFF projects and FanDuel prices is scored — on
+  one real slate that was 825 props instead of ~320.
+- Filters live on the page rather than the sidebar: game, team, position,
+  player, market, and whether a play is scored by gap or EV. Their options come
+  from whatever slate is loaded, so they always match the data.
+- Two listing thresholds instead of tiers, because a 10% gap and a 10% EV are
+  not the same claim: **minimum gap** for yardage props, **minimum EV** for
+  receptions and touchdowns.
+- Results are one ranked table with a Why line per play, and a CSV download.
+
+**To deploy it**, create a *second* Streamlit app from this same repository:
+
+1. **share.streamlit.io → Create app**, same repository and branch.
+2. Set **Main file path** to `props.py` (this is the only difference).
+3. Give it **the same secrets** — `ODDS_API_KEY`, `GITHUB_TOKEN`, `GITHUB_REPO`.
+   The shared `GITHUB_REPO` is what makes both apps read one odds snapshot.
+
+Running it locally is `streamlit run props.py`.
+
+**Overs only, still.** Every play is an OVER or an anytime-TD "Yes", and the
+stored snapshot has the Under side pruned out, so unders are not available here
+even in principle without a separate fetch.
+
+---
+
 ## What this app does not do
 
 It does not scrape FanDuel, call FanDuel's endpoints, automate a login, or place
