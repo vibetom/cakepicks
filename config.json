@@ -9,7 +9,7 @@
   "receptions_floor": 1.0,
   "ev_enabled": true,
   "starters_only": false,
-  "exclude_questionable": false,
+  "exclude_questionable": true,
   "exclude_doubtful": true,
   "stake": 10.0,
   "season_year": 2026,
@@ -19,6 +19,8 @@
     "player_reception_yds",
     "player_rush_yds",
     "player_pass_yds",
+    "player_rush_attempts",
+    "player_receptions",
     "player_anytime_td",
     "player_pass_tds"
   ]
