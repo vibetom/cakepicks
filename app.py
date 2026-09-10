@@ -20,7 +20,7 @@ from core import parlay as parlay_mod
 from core import runlog
 from core import snapshots
 from core import scoring
-from core.betslip import leg_link, parlay_link
+from core.betslip import leg_link, parlay_link_status
 from core.config import DEFAULTS, ODDS_TICKS, load_config, save_config
 from core.matching import AliasStore
 from core.store import build_store
@@ -793,13 +793,32 @@ with tab_parlay:
             f"{summary['leg_count']} legs. Fill them by hand if you want."
         )
 
-    deep_link = parlay_link(picks)
-    if deep_link:
-        st.link_button("Load parlay at FanDuel (beta)", deep_link)
-        st.caption("Unofficial URL format — if it doesn't load, use the per-leg links.")
+    st.subheader("Send it to whoever is placing the bet")
+    betslip = parlay_link_status(picks)
+    if betslip["url"]:
+        st.success(
+            f"One link that loads all {betslip['leg_count']} legs onto a FanDuel "
+            "betslip. Whoever opens it gets the whole parlay — they don't add "
+            "legs one at a time."
+        )
+        st.link_button("🔗 Open the full parlay on FanDuel", betslip["url"],
+                       type="primary")
+        st.caption("Or copy this and send it to them:")
+        st.code(betslip["url"], language=None)
+        st.caption(
+            "The recipient needs their own FanDuel account, signed in, in a "
+            "state where FanDuel operates. This URL format is unofficial, so "
+            "check the slip matches the table before anyone places money on it."
+        )
+    else:
+        st.warning(betslip["reason"])
+        if betslip["missing"]:
+            st.caption("Legs without IDs: " + ", ".join(betslip["missing"])
+                       + ". The per-leg links in the table still work as a fallback.")
 
     st.subheader("Share block")
-    st.code(parlay_mod.share_text(picks, summary), language=None)
+    st.code(parlay_mod.share_text(picks, summary, parlay_url=betslip["url"]),
+            language=None)
 
     with st.expander("Market coverage this week"):
         total = coverage["total_events"]

@@ -50,8 +50,14 @@ def combine(picks: list[dict], stake: float) -> dict:
     }
 
 
-def share_text(picks: list[dict], summary: dict, *, title: str = "This week's league parlay") -> str:
-    """Plain-text block for the group chat, one line per leg."""
+def share_text(picks: list[dict], summary: dict, *,
+               title: str = "This week's league parlay",
+               parlay_url: str | None = None) -> str:
+    """Plain-text block for the group chat, one line per leg.
+
+    The betslip URL goes in here deliberately: whoever places the bet is often
+    not the person running the app, and this block is what reaches them.
+    """
     lines = [title, ""]
     for row in picks:
         prop = row.get("pick")
@@ -83,4 +89,8 @@ def share_text(picks: list[dict], summary: dict, *, title: str = "This week's le
         lines.append("No legs qualified this week.")
     if summary["empty_count"]:
         lines.append(f"Empty slots: {', '.join(summary['empty_teams'])}")
+    if parlay_url:
+        lines.append("")
+        lines.append("Tap to load the whole parlay on FanDuel:")
+        lines.append(parlay_url)
     return "\n".join(lines)

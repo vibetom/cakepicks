@@ -631,3 +631,59 @@ class TestRestoreOnRestart:
         app.run()
         assert_no_exceptions(app)
         assert not any("Reload saved odds" in b.label for b in app.button)
+
+
+class TestParlayLinkInTheUI:
+    """The deliverable: one link, copyable, that someone else can open."""
+
+    @pytest.fixture
+    def loaded(self, monkeypatch, events, raw_by_event, league, projections, config):
+        monkeypatch.setenv("ODDS_API_KEY", "test-key")
+        return dict(
+            config=config, events=events, raw_by_event=raw_by_event,
+            teams_raw=league, projections=projections,
+            projection_filename="week-2.csv", projection_warnings=[],
+            odds_fetched_at="2026-09-10T18:00:00+00:00",
+            roster_fetched_at="2026-09-10T18:00:00+00:00",
+            overrides={}, approved_reviews=set(), quota={},
+        )
+
+    def _parlay_url(self, app):
+        return next((c.value for c in app.code
+                     if c.value.startswith("https://sportsbook.fanduel.com")), None)
+
+    def test_the_url_is_rendered_and_copyable(self, loaded):
+        app = run_app(**loaded)
+        assert_no_exceptions(app)
+        url = self._parlay_url(app)
+        assert url, "the whole-parlay URL must be shown as copyable text"
+        assert url.count("marketId[") == 2      # two filled legs in the fixture
+
+    def test_the_url_covers_every_filled_leg(self, loaded):
+        app = run_app(**loaded)
+        frame = app.dataframe[0].value
+        filled = sum(1 for prop in frame["Prop"] if prop != "NONE")
+        assert self._parlay_url(app).count("selectionId[") == filled
+
+    def test_the_share_block_includes_the_url(self, loaded):
+        """Whoever places the bet gets it from the share block, not the app."""
+        app = run_app(**loaded)
+        share = next(c.value for c in app.code if "league parlay" in c.value)
+        assert "sportsbook.fanduel.com/addToBetslip" in share
+
+    def test_missing_ids_explain_themselves(self, loaded):
+        """Strip the market sids: the app must say why, not fail silently."""
+        stripped = {}
+        for event_id, payload in loaded["raw_by_event"].items():
+            payload = json.loads(json.dumps(payload))
+            for bookmaker in payload["bookmakers"]:
+                for market in bookmaker["markets"]:
+                    market.pop("sid", None)
+            stripped[event_id] = payload
+        loaded["raw_by_event"] = stripped
+
+        app = run_app(**loaded)
+        assert_no_exceptions(app)
+        assert self._parlay_url(app) is None
+        warnings = " ".join(w.value for w in app.warning)
+        assert "missing FanDuel's selection IDs" in warnings

@@ -129,3 +129,30 @@ class TestClient:
         """§5: main lines only — alternate_* keys would blow the quota."""
         assert not any(m.startswith("alternate") for m in odds_mod.DEFAULT_MARKETS)
         assert len(odds_mod.DEFAULT_MARKETS) == 7
+
+
+class TestSourceIds:
+    """§12: the source IDs that make a whole-parlay betslip link possible."""
+
+    def test_market_sid_comes_from_the_market_not_the_outcome(self, raw_by_event):
+        """The regression: reading it off the outcome left it None everywhere,
+        which silently disabled the full-parlay link."""
+        props = odds_mod.parse_event_props(raw_by_event["evt-cin-ne"])
+        yardage = next(p for p in props if p["market"] == "player_reception_yds")
+        assert yardage["market_sid"] == "mkt-player_reception_yds"
+        assert yardage["sid"] == "sid-chase-recyds"
+
+    def test_every_prop_carries_both_ids(self, raw_by_event):
+        for payload in raw_by_event.values():
+            for prop in odds_mod.parse_event_props(payload):
+                if prop.get("sid"):
+                    assert prop["market_sid"], f"{prop['market']} lost its market sid"
+
+    def test_missing_market_sid_is_none_not_an_error(self):
+        payload = {"id": "e", "home_team": "Green Bay Packers",
+                   "away_team": "Chicago Bears",
+                   "bookmakers": [{"key": "fanduel", "markets": [
+                       {"key": "player_rush_yds", "outcomes": [
+                           {"name": "Over", "description": "Josh Jacobs",
+                            "price": -110, "point": 60.5}]}]}]}
+        assert odds_mod.parse_event_props(payload)[0]["market_sid"] is None

@@ -60,24 +60,24 @@ def raw_by_event():
         "bookmakers": [{
             "key": "fanduel", "title": "FanDuel", "last_update": "2026-09-12T12:00:00Z",
             "markets": [
-                {"key": "player_reception_yds", "outcomes": [
+                {"key": "player_reception_yds", "sid": "mkt-player_reception_yds", "outcomes": [
                     _outcome("Over", "Ja'Marr Chase", -110, 74.5, "sid-chase-recyds"),
                     _outcome("Under", "Ja'Marr Chase", -110, 74.5),
                     _outcome("Over", "Kayshon Boutte", -114, 38.5, "sid-boutte-recyds"),
                 ]},
-                {"key": "player_pass_yds", "outcomes": [
+                {"key": "player_pass_yds", "sid": "mkt-player_pass_yds", "outcomes": [
                     _outcome("Over", "Joe Burrow", -108, 248.5, "sid-burrow-passyds"),
                 ]},
-                {"key": "player_receptions", "outcomes": [
+                {"key": "player_receptions", "sid": "mkt-player_receptions", "outcomes": [
                     # Priced below a -110 floor on purpose (acceptance check 4).
                     _outcome("Over", "Ja'Marr Chase", -155, 4.5, "sid-chase-recs"),
                     _outcome("Over", "Kayshon Boutte", -105, 1.5, "sid-boutte-recs"),
                 ]},
-                {"key": "player_anytime_td", "outcomes": [
+                {"key": "player_anytime_td", "sid": "mkt-player_anytime_td", "outcomes": [
                     _outcome("Yes", "Ja'Marr Chase", 110, None, "sid-chase-td"),
                     _outcome("No", "Ja'Marr Chase", -140),
                 ]},
-                {"key": "player_pass_tds", "outcomes": [
+                {"key": "player_pass_tds", "sid": "mkt-player_pass_tds", "outcomes": [
                     _outcome("Over", "Joe Burrow", 100, 1.5, "sid-burrow-passtds"),
                 ]},
             ],
@@ -89,13 +89,13 @@ def raw_by_event():
         "bookmakers": [{
             "key": "fanduel", "title": "FanDuel", "last_update": "2026-09-12T12:00:00Z",
             "markets": [
-                {"key": "player_rush_yds", "outcomes": [
+                {"key": "player_rush_yds", "sid": "mkt-player_rush_yds", "outcomes": [
                     _outcome("Over", "Josh Jacobs", -108, 62.5, "sid-jacobs-rushyds"),
                 ]},
-                {"key": "player_rush_attempts", "outcomes": [
+                {"key": "player_rush_attempts", "sid": "mkt-player_rush_attempts", "outcomes": [
                     _outcome("Over", "Josh Jacobs", -120, 15.5, "sid-jacobs-rushatt"),
                 ]},
-                {"key": "player_anytime_td", "outcomes": [
+                {"key": "player_anytime_td", "sid": "mkt-player_anytime_td", "outcomes": [
                     # Absurd price for a strong projection -> trips the ceiling.
                     _outcome("Yes", "Josh Jacobs", 250, None, "sid-jacobs-td"),
                 ]},

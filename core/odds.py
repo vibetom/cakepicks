@@ -189,10 +189,14 @@ def parse_event_props(payload: dict, event: dict | None = None) -> list[dict]:
         for market in bookmaker.get("markets") or []:
             market_key = market.get("key")
             market_link = market.get("link")
+            market_sid = market.get("sid")
             for outcome in market.get("outcomes") or []:
                 parsed = _parse_outcome(outcome, market_key)
                 if parsed is None:
                     continue
+                # Outcome-level market_sid is not something the vendor sends
+                # today; prefer the market's own sid and keep the fallback.
+                parsed["market_sid"] = parsed.get("market_sid") or market_sid
                 parsed.update({
                     "event_id": event_id,
                     "home_team": home,

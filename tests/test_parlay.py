@@ -5,7 +5,7 @@ import json
 import pytest
 
 from core import runlog
-from core.betslip import leg_link, parlay_link
+from core.betslip import leg_link, parlay_link, parlay_link_status
 from core.parlay import combine, describe_prop, score_text, share_text
 
 
@@ -180,3 +180,73 @@ class TestRunLog:
         (tmp_path / "runs").mkdir()
         (tmp_path / "runs" / "broken.json").write_text("{ nope")
         assert runlog.list_runs(store) == []
+
+
+class TestWholeParlayLink:
+    """§12: one link that loads every leg, for whoever places the bet."""
+
+    def _picks(self, count=3, overrides=None):
+        """`overrides` maps a leg index to fields to change on that leg."""
+        overrides = overrides or {}
+        rows = []
+        for i in range(count):
+            prop = leg(-110, sid=f"sel{i}", market_sid=f"mkt{i}")
+            prop.update(overrides.get(i, {}))
+            rows.append({"team_id": i, "team_name": f"Team {i}", "pick": prop})
+        return rows
+
+    def test_builds_one_url_with_every_leg(self):
+        status = parlay_link_status(self._picks(3))
+        assert status["leg_count"] == 3
+        url = status["url"]
+        for i in range(3):
+            assert f"marketId[{i}]=mkt{i}" in url
+            assert f"selectionId[{i}]=sel{i}" in url
+        assert url.startswith("https://sportsbook.fanduel.com/addToBetslip?")
+
+    def test_ten_legs(self):
+        """The real case: a full 10-team league in a single link."""
+        status = parlay_link_status(self._picks(10))
+        assert status["leg_count"] == 10
+        assert status["url"].count("marketId[") == 10
+        assert "marketId[9]=mkt9" in status["url"]
+
+    def test_empty_slots_are_skipped_not_fatal(self):
+        picks = self._picks(2) + [{"team_id": 9, "team_name": "Bye", "pick": None}]
+        status = parlay_link_status(picks)
+        assert status["leg_count"] == 2
+        assert status["url"].count("marketId[") == 2
+
+    def test_a_leg_without_ids_blocks_the_link_and_names_the_team(self):
+        """A partial slip would under-report the bet, which is worse than none."""
+        picks = self._picks(3, {1: {"market_sid": None}})
+        status = parlay_link_status(picks)
+        assert status["url"] is None
+        assert status["missing"] == ["Team 1"]
+        assert "1 of 3 legs" in status["reason"]
+        assert "Fetching fresh odds" in status["reason"]
+
+    def test_no_legs_at_all(self):
+        status = parlay_link_status([{"team_id": 1, "team_name": "A", "pick": None}])
+        assert status["url"] is None
+        assert status["leg_count"] == 0
+
+    def test_ids_are_url_encoded(self):
+        picks = self._picks(1, {0: {"market_sid": "42.123/456", "sid": "a b&c"}})
+        url = parlay_link_status(picks)["url"]
+        assert "42.123%2F456" in url
+        assert "a%20b%26c" in url
+
+    def test_share_text_carries_the_link(self):
+        """The share block is what reaches whoever places the bet."""
+        picks = self._picks(2)
+        summary = combine(picks, 10.0)
+        url = parlay_link_status(picks)["url"]
+        text = share_text(picks, summary, parlay_url=url)
+        assert url in text
+        assert "Tap to load the whole parlay" in text
+
+    def test_share_text_without_a_link_says_nothing_about_it(self):
+        picks = self._picks(2)
+        text = share_text(picks, combine(picks, 10.0))
+        assert "FanDuel" not in text

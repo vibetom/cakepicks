@@ -161,7 +161,11 @@ tells you so, and the Download buttons still let you keep records by hand.
    the API — only the Fetch button does that.
 6. **Check the "Review & overrides" tab** if any leg is flagged 🚩, and swap in
    an alternative for any team you disagree with.
-7. **Copy the share block** into your league chat, and place the bet at FanDuel.
+7. **Send it on.** Under *"Send it to whoever is placing the bet"* there's a single
+   link that loads **every leg at once** onto a FanDuel betslip — the recipient
+   doesn't add them one at a time. Copy that link, or copy the share block (which
+   contains it) into your league chat. Whoever opens it needs their own FanDuel
+   account and to be somewhere FanDuel operates.
 8. **Hit "💾 Save this run"** in the History tab. Once the games finish, come back
    and mark each leg Win/Loss/Push — the season totals build up from there.
 
@@ -313,7 +317,21 @@ Two corrections were made while building against the spec:
   the formula, and the test asserts 66.2%.
 - The λ=0.96 anytime-TD check (≈61.7%) is correct and is tested as such.
 
+## The FanDuel betslip link
+
+The whole-parlay link is built from source IDs the odds feed provides
+(`includeSids`). **This URL format is unofficial** — FanDuel can change it
+without notice — so treat it as a convenience, not a guarantee: whoever opens it
+should check the slip matches the table before staking anything.
+
+The link is all-or-nothing by design. If any leg is missing its IDs, no link is
+produced and the app names the teams involved, because a partial slip that
+silently drops legs is worse than no link at all. Missing IDs usually mean a
+market was posted late; refetching odds normally fixes it. The per-leg links in
+the results table remain as a fallback.
+
 ## What this app does not do
 
 It does not scrape FanDuel, call FanDuel's endpoints, automate a login, or place
-a bet. It reads odds from a licensed API and hands you links. You place the bet.
+a bet. It reads odds from a licensed API and hands you links. A person places
+the bet.
