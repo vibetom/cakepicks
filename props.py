@@ -590,7 +590,25 @@ else:
             },
         )
 
-        st.caption("Copy this into the app:")
+        st.markdown("**Quick entry**")
+        st.caption(
+            "No deep link is possible here — a pick'em app's slip URL needs its "
+            "own projection IDs, and the odds feed carries FanDuel's only. These "
+            "copy buttons are the next best thing: paste each name into the app's "
+            "search, then take the pick shown beside it."
+        )
+        for index, leg in enumerate(legs):
+            name_col, pick_col = st.columns([1, 1])
+            with name_col:
+                st.code(leg.get("player") or "", language=None)
+            with pick_col:
+                st.markdown(
+                    f"{pickem_mod.stat_name(leg)} — **{pickem_mod.selection(leg)}**"
+                    + (f"  ·  we project {leg['projection']:.1f}"
+                       if leg.get("projection") is not None else "")
+                )
+
+        st.caption("Or copy the whole slip:")
         st.code(pickem_mod.slip_text(legs), language=None)
 
     if st.button("🗑️ Clear the slip"):

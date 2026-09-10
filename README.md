@@ -423,6 +423,14 @@ entering them:
   fixed multiplier, so what matters is how often every leg lands, and whether
   the multiplier beats `1 ÷ that`.
 
+**There is no pick'em deep link, and there can't be one from this data.** The
+FanDuel link works because the odds feed hands us FanDuel's own `marketId` and
+`selectionId`. A pick'em slip URL needs *that operator's* projection IDs, which
+cannot be derived from a player name, stat and line — and nothing in the feed
+carries them. Rather than ship a URL that might load the wrong slip, the tab
+gives per-player copy buttons so each name can be pasted straight into the
+app's search.
+
 **Read that percentage carefully.** Receptions and touchdown props have a real
 Poisson probability. Yardage props do not — yards are not Poisson — so their
 figure comes from FanDuel's price, which is *the market's* opinion. Since this
