@@ -934,3 +934,85 @@ class TestSelectedButUnfetchedMarkets:
         assert_no_exceptions(app)
         info = " ".join(i.value for i in app.info)
         assert "hasn't posted" in info
+
+
+class TestOddsCeilingControl:
+    """The ceiling slider, driven through the real UI."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_caches(self):
+        import streamlit as st
+        st.cache_resource.clear()
+        st.cache_data.clear()
+        yield
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+    @pytest.fixture
+    def loaded(self, monkeypatch, tmp_path, events, raw_by_event, league,
+               projections, config):
+        monkeypatch.setenv("ODDS_API_KEY", "test-key")
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("GITHUB_REPO", raising=False)
+        monkeypatch.chdir(tmp_path)
+        return dict(
+            config={**config, "sanity_ceiling": 5.0},
+            events=events, raw_by_event=raw_by_event,
+            odds_markets=list(config["markets"]), teams_raw=league,
+            projections=projections, projection_filename="week-2.csv",
+            projection_warnings=[],
+            odds_fetched_at="2026-09-10T18:00:00+00:00",
+            roster_fetched_at="2026-09-10T18:00:00+00:00",
+            overrides={}, approved_reviews=set(), quota={},
+        )
+
+    def test_the_control_exists_and_defaults_to_plus_300(self, loaded):
+        app = run_app(**loaded)
+        assert_no_exceptions(app)
+        ceiling = next(s for s in app.sidebar.select_slider
+                       if s.label == "Odds ceiling")
+        assert ceiling.value == 300
+
+    def test_tightening_it_drops_a_longshot_without_an_api_call(self, loaded,
+                                                               monkeypatch):
+        import core.odds as odds_mod
+
+        def explode(*args, **kwargs):
+            raise AssertionError("changing the ceiling must not call the odds API")
+
+        monkeypatch.setattr(odds_mod.TheOddsAPI, "get_week_events", explode)
+        monkeypatch.setattr(odds_mod.TheOddsAPI, "get_event_props", explode)
+
+        app = run_app(**loaded)
+        before = app.dataframe[0].value
+        jacobs_before = before[before["Team"] == "Jacobs Ladder"].iloc[0]
+        assert jacobs_before["Prop"] == "Anytime TD"     # +250 in the fixture
+
+        next(s for s in app.sidebar.select_slider
+             if s.label == "Odds ceiling").set_value(200).run()
+        assert_no_exceptions(app)
+
+        after = app.dataframe[0].value
+        jacobs_after = after[after["Team"] == "Jacobs Ladder"].iloc[0]
+        assert jacobs_after["Prop"] != "Anytime TD"
+        assert jacobs_after["Prop"] != "NONE", "the slot should fall back, not empty"
+
+    def test_no_ceiling_is_selectable(self, loaded):
+        app = run_app(**loaded)
+        next(s for s in app.sidebar.select_slider
+             if s.label == "Odds ceiling").set_value(None).run()
+        assert_no_exceptions(app)
+        frame = app.dataframe[0].value
+        assert "Anytime TD" in set(frame["Prop"])
+
+    def test_a_ceiling_below_the_floor_is_called_out(self, loaded):
+        """A +100 ceiling with a +300 floor admits nothing; say so."""
+        app = run_app(**loaded)
+        next(s for s in app.sidebar.select_slider
+             if s.label == "Odds ceiling").set_value(100)
+        next(s for s in app.sidebar.select_slider
+             if s.label == "Odds floor").set_value(300)
+        app.run()
+        assert_no_exceptions(app)
+        errors = " ".join(e.value for e in app.sidebar.error)
+        assert "shorter than the floor" in errors

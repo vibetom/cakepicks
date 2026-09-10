@@ -357,3 +357,55 @@ class TestFuzzyMatchReporting:
         attached = [p for props in scored["by_team"].values() for p in props
                     if p["player_name"] == "Brian Chase"]
         assert attached == []
+
+
+class TestOddsCeiling:
+    """Longshot legs turn a parlay into a lottery ticket."""
+
+    def test_a_longshot_is_excluded_with_a_reason(self, run, config):
+        # The fixture's Josh Jacobs anytime TD is +250.
+        result = run(config, odds_ceiling=200, sanity_ceiling=5.0)
+        td = [p for p in props_for(result, 2) if p["market"] == "player_anytime_td"]
+        assert td
+        assert not td[0]["eligible"]
+        assert "price_ceiling" in td[0]["exclusion_codes"]
+        assert "longer than" in td[0]["exclusion_reason"]
+
+    def test_a_price_inside_the_ceiling_passes(self, run, config):
+        result = run(config, odds_ceiling=300, sanity_ceiling=5.0)
+        td = [p for p in props_for(result, 2) if p["market"] == "player_anytime_td"]
+        assert "price_ceiling" not in td[0]["exclusion_codes"]
+
+    def test_no_pick_ever_exceeds_the_ceiling(self, run, config):
+        for ceiling in (200, 300, 400):
+            result = run(config, odds_ceiling=ceiling, sanity_ceiling=5.0)
+            for row in result["picks"]:
+                if row["pick"]:
+                    assert scoring.price_meets_ceiling(row["pick"]["price"], ceiling)
+
+    def test_none_disables_the_ceiling(self, run, config):
+        result = run(config, odds_ceiling=None, sanity_ceiling=5.0)
+        td = [p for p in props_for(result, 2) if p["market"] == "player_anytime_td"]
+        assert "price_ceiling" not in td[0]["exclusion_codes"]
+
+    def test_a_missing_key_behaves_as_no_ceiling(self, run, config):
+        """An older saved config must not silently drop every longshot."""
+        legacy = {k: v for k, v in config.items() if k != "odds_ceiling"}
+        result = run(legacy, sanity_ceiling=5.0)
+        td = [p for p in props_for(result, 2) if p["market"] == "player_anytime_td"]
+        assert "price_ceiling" not in td[0]["exclusion_codes"]
+
+    def test_the_slot_falls_back_rather_than_emptying(self, run, config):
+        """Excluding a longshot should promote the next-best prop, not blank it."""
+        loose = run(config, odds_ceiling=None, sanity_ceiling=5.0)
+        tight = run(config, odds_ceiling=200, sanity_ceiling=5.0)
+        jacobs_loose = pick_for(loose, "Jacobs Ladder")
+        jacobs_tight = pick_for(tight, "Jacobs Ladder")
+        assert jacobs_loose["pick"]["market"] == "player_anytime_td"
+        assert jacobs_tight["pick"] is not None
+        assert jacobs_tight["pick"]["market"] != "player_anytime_td"
+
+    def test_none_reason_names_the_ceiling(self, run, config):
+        result = run(config, odds_ceiling=-300, odds_floor=-300)
+        reasons = [r["none_reason"] for r in result["picks"] if r["none_reason"]]
+        assert any("ceiling" in r for r in reasons)

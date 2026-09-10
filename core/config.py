@@ -18,12 +18,21 @@ ODDS_TICKS = (
        260, 270, 280, 290, 300]
 )
 
+# Ceiling ticks run from even money upward: the control answers "don't take
+# anything longer than this". None means no ceiling at all.
+CEILING_TICKS = (
+    [t for t in ODDS_TICKS if t >= 100]
+    + [320, 340, 360, 380, 400, 450, 500, 550, 600, 700, 800, 900, 1000]
+    + [None]
+)
+
 DEFAULTS = {
     # Thresholds
     "gap_threshold": 0.10,        # X: Tier-1 qualification for yardage props
     "ev_threshold": 0.20,         # Y: EV needed to steal a qualifying yardage slot
     "sanity_ceiling": 0.35,       # EV above this is flagged for review, never auto-picked
     "odds_floor": -110,           # worst acceptable price, any prop type
+    "odds_ceiling": 300,          # longest acceptable price; None disables it
     # Volume / projection floors
     "yards_floor": 25.0,          # rec-yds and rush-yds
     "pass_yards_floor": 175.0,

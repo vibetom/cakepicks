@@ -21,7 +21,7 @@ from core import runlog
 from core import snapshots
 from core import scoring
 from core.betslip import leg_link, parlay_link_status
-from core.config import DEFAULTS, ODDS_TICKS, load_config, save_config
+from core.config import CEILING_TICKS, DEFAULTS, ODDS_TICKS, load_config, save_config
 from core.matching import AliasStore, RejectionStore
 from core.store import build_store
 from core.projections import ProjectionError, load_projections
@@ -226,6 +226,24 @@ def render_sidebar() -> dict:
             help="Worst price you'll accept, on any prop type. -105 passes a "
                  "-110 floor; -120 fails.",
         )
+        ceiling_value = config.get("odds_ceiling", DEFAULTS["odds_ceiling"])
+        if ceiling_value not in CEILING_TICKS:
+            ceiling_value = DEFAULTS["odds_ceiling"]
+        new["odds_ceiling"] = st.select_slider(
+            "Odds ceiling", options=CEILING_TICKS, value=ceiling_value,
+            format_func=lambda v: "No ceiling" if v is None else scoring.format_american(v),
+            help="Longest price you'll accept. A 10-leg parlay of longshots is "
+                 "a lottery ticket, so this keeps single legs from being priced "
+                 "like one. Anytime TD props are where these turn up.",
+        )
+        if (new["odds_ceiling"] is not None
+                and scoring.american_to_decimal(new["odds_ceiling"])
+                < scoring.american_to_decimal(new["odds_floor"])):
+            st.error(
+                "The ceiling is shorter than the floor, so no price can pass "
+                "both. Raise the ceiling or lower the floor."
+            )
+
         if new["odds_floor"] >= -110:
             st.caption(
                 "⚠️ FanDuel usually prices yardage props at -114 or -115, so a "

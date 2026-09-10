@@ -87,6 +87,19 @@ def price_meets_floor(american: float, floor_american: float) -> bool:
     return american_to_decimal(american) >= american_to_decimal(floor_american) - 1e-12
 
 
+def price_meets_ceiling(american: float, ceiling_american) -> bool:
+    """True if `american` is no longer a price than the ceiling.
+
+    The mirror of price_meets_floor: the floor rejects prices that are too
+    short to be worth taking, the ceiling rejects longshots. A ceiling of None
+    disables the check. Compared in decimal space for the same reason -- +700
+    and -155 do not order numerically on the American scale.
+    """
+    if ceiling_american is None:
+        return True
+    return american_to_decimal(american) <= american_to_decimal(ceiling_american) + 1e-12
+
+
 def poisson_pmf(k: int, lam: float) -> float:
     """P(X = k) for X ~ Poisson(lam)."""
     if k < 0:

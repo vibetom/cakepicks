@@ -54,13 +54,21 @@ def score_prop(prop: dict, projection: dict, config: dict) -> dict:
         label = scoring.MARKET_LABELS.get(market, market)
         reasons.append(("market_off", f"the {label} market is turned off"))   # (code, human-readable text)
 
-    # Price floor applies to every prop type.
+    # Price limits apply to every prop type: the floor rejects prices too
+    # short to be worth taking, the ceiling rejects longshots.
     try:
         if not scoring.price_meets_floor(prop["price"], config["odds_floor"]):
             reasons.append((
                 "price_floor",
                 f"price {scoring.format_american(prop['price'])} is worse than the "
                 f"{scoring.format_american(config['odds_floor'])} floor",
+            ))
+        ceiling = config.get("odds_ceiling")
+        if not scoring.price_meets_ceiling(prop["price"], ceiling):
+            reasons.append((
+                "price_ceiling",
+                f"price {scoring.format_american(prop['price'])} is longer than the "
+                f"{scoring.format_american(ceiling)} ceiling",
             ))
     except ValueError:
         out.update({
@@ -407,6 +415,8 @@ def _none_reason(team: dict, candidates: list[dict], config: dict) -> str:
     parts = []
     if counts.get("price_floor"):
         parts.append(f"{counts['price_floor']} priced worse than the odds floor")
+    if counts.get("price_ceiling"):
+        parts.append(f"{counts['price_ceiling']} longer than the odds ceiling")
     if counts.get("volume_floor"):
         parts.append(f"{counts['volume_floor']} below a volume floor")
     if counts.get("sanity_ceiling"):

@@ -111,3 +111,39 @@ class TestGapAndEv:
 
     def test_fair_bet_has_zero_ev(self):
         assert scoring.expected_value(0.5, 100) == pytest.approx(0.0)
+
+
+class TestPriceCeiling:
+    """The mirror of the floor: reject prices that are too long."""
+
+    @pytest.mark.parametrize("price,ceiling,expected", [
+        (700, 300, False),      # the case that prompted it
+        (460, 300, False),
+        (301, 300, False),
+        (300, 300, True),       # equal passes, as the floor does
+        (250, 300, True),
+        (-155, 300, True),      # favourites are never too long
+        (-114, 300, True),
+        (100, 300, True),
+    ])
+    def test_ceiling(self, price, ceiling, expected):
+        assert scoring.price_meets_ceiling(price, ceiling) is expected
+
+    def test_none_disables_it(self):
+        assert scoring.price_meets_ceiling(5000, None)
+
+    def test_it_does_not_order_numerically(self):
+        """-155 is a shorter price than +200 despite the larger absolute value."""
+        assert scoring.price_meets_ceiling(-155, 200)
+        assert not scoring.price_meets_ceiling(250, 200)
+
+    def test_floor_and_ceiling_together_bracket_a_range(self):
+        floor, ceiling = -120, 300
+        inside = [-120, -110, 100, 250, 300]
+        outside = [-200, -130, 320, 700]
+        for price in inside:
+            assert scoring.price_meets_floor(price, floor)
+            assert scoring.price_meets_ceiling(price, ceiling)
+        for price in outside:
+            assert not (scoring.price_meets_floor(price, floor)
+                        and scoring.price_meets_ceiling(price, ceiling))

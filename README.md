@@ -216,6 +216,17 @@ mean well above his median outcome. The volume floors restrict gap scoring to
 players where mean ≈ median. Setting them to zero will produce confident-looking
 garbage.
 
+### Why the ceiling matters
+
+Ten legs multiply. A parlay of longshot anytime-TD props prices like a lottery
+ticket rather than a bet: on one real slate, three legs at +330/+440/+460 took
+the whole parlay to **+1,072,419**. Capping single legs at +300 dropped it to
+**+54,687** with all ten slots still filled — the longshot picks simply fell
+back to each team's next-best prop.
+
+Anytime TD is where these turn up, since a low-usage player's TD price runs
+long. If you want some of them back, slide the ceiling to +400.
+
 ### Why you may see a lot of NONE at first
 
 The default odds floor is **-110**, but FanDuel routinely prices yardage props at
@@ -232,7 +243,8 @@ floor to **-120** and it will look much healthier.
 | Yardage gap threshold (X) | +10% | How far a projection must beat the line for Tier 1 |
 | EV override threshold (Y) | +20% | EV needed to steal a slot from a qualifying yardage prop |
 | Sanity ceiling | +35% | EV above this is flagged for review, never auto-picked |
-| Odds floor | −110 | Worst price accepted, any prop type |
+| Odds floor | −110 | Shortest price accepted — rejects props too juiced to be worth taking |
+| Odds ceiling | +300 | Longest price accepted — rejects longshots. Set to *No ceiling* to disable |
 | Rec/rush yards floor | 25 yds | Minimum projection to gap-score a yardage prop |
 | Passing yards floor | 175 yds | Same, for QBs |
 | Rush attempts floor | 8 att | Same, for carries |
