@@ -7,10 +7,8 @@ Below the fuzzy threshold a name is reported as unmatched rather than guessed.
 
 from __future__ import annotations
 
-import json
 import re
 import unicodedata
-from pathlib import Path
 
 from rapidfuzz import fuzz, process
 
@@ -39,39 +37,44 @@ def normalize_name(name: str) -> str:
 
 
 class AliasStore:
-    """Manual name-match overrides, persisted as a flat JSON dict.
+    """Manual name-match overrides, persisted as a flat JSON document.
 
     Keys are normalized source names (from the CSV or the odds feed); values
     are the canonical ESPN name they should resolve to.
     """
 
-    def __init__(self, path: str | Path = "data/aliases.json"):
-        self.path = Path(path)
+    FILE = "aliases.json"
+
+    def __init__(self, store=None):
+        self.store = store
         self._aliases: dict[str, str] = {}
         self.load()
 
     def load(self) -> dict[str, str]:
-        if self.path.exists():
-            try:
-                raw = json.loads(self.path.read_text() or "{}")
-                self._aliases = {
-                    normalize_name(k): str(v) for k, v in raw.items() if v
-                }
-            except (json.JSONDecodeError, OSError):
-                self._aliases = {}
+        self._aliases = {}
+        if self.store is None:
+            return self._aliases
+        try:
+            raw = self.store.read_json(self.FILE)
+        except Exception:
+            return self._aliases
+        if isinstance(raw, dict):
+            self._aliases = {normalize_name(k): str(v) for k, v in raw.items() if v}
         return self._aliases
 
     def save(self) -> bool:
-        """Persist to disk. Returns False on a read-only filesystem.
+        """Persist to the store. Returns False when the write was refused.
 
-        Hosted deployments often cannot write here; the alias still applies for
-        the rest of the session, and the UI offers a download instead.
+        A failed save is never fatal: the alias still applies for the rest of
+        the session and the UI offers a download instead.
         """
+        if self.store is None:
+            return False
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(json.dumps(self._aliases, indent=2, sort_keys=True))
-            return True
-        except OSError:
+            return self.store.write_json(
+                self.FILE, self._aliases, "Update player name aliases"
+            )
+        except Exception:
             return False
 
     def get(self, source_name: str) -> str | None:

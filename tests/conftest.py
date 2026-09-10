@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.config import DEFAULTS  # noqa: E402
 from core.matching import AliasStore  # noqa: E402
 from core.projections import load_projections  # noqa: E402
+from core.store import LocalStore  # noqa: E402
 
 
 @pytest.fixture
@@ -20,8 +21,13 @@ def config():
 
 
 @pytest.fixture
-def aliases(tmp_path):
-    return AliasStore(tmp_path / "aliases.json")
+def store(tmp_path):
+    return LocalStore(tmp_path)
+
+
+@pytest.fixture
+def aliases(store):
+    return AliasStore(store)
 
 
 @pytest.fixture

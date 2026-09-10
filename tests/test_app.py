@@ -4,6 +4,7 @@ These drive app.py through Streamlit's headless AppTest harness, which runs the
 real script and records any exception it raises.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -185,3 +186,162 @@ class TestBadInputs:
             roster_fetched_at="2026-09-10T18:00:00+00:00",
         )
         assert_no_exceptions(app)
+
+
+class TestStorageWiring:
+    """The app must render correctly under every persistence configuration."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_caches(self):
+        import streamlit as st
+        st.cache_resource.clear()
+        st.cache_data.clear()
+        yield
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+    def test_local_storage_is_reported_as_ephemeral(self, monkeypatch):
+        monkeypatch.setenv("ODDS_API_KEY", "test-key")
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("GITHUB_REPO", raising=False)
+        app = run_app()
+        assert_no_exceptions(app)
+        notes = " ".join(w.value for w in app.sidebar.caption) + \
+                " ".join(getattr(e, "value", "") for e in app.sidebar.info)
+        assert "GITHUB_TOKEN" in notes
+
+    def test_token_without_repo_warns_and_still_runs(self, monkeypatch):
+        monkeypatch.setenv("ODDS_API_KEY", "test-key")
+        monkeypatch.setenv("GITHUB_TOKEN", "tok_abc")
+        monkeypatch.delenv("GITHUB_REPO", raising=False)
+        app = run_app()
+        assert_no_exceptions(app)
+
+    def test_unreachable_github_does_not_break_the_app(self, monkeypatch):
+        """A storage outage must degrade to a message, never a stack trace."""
+        import requests
+
+        monkeypatch.setenv("ODDS_API_KEY", "test-key")
+        monkeypatch.setenv("GITHUB_TOKEN", "tok_abc")
+        monkeypatch.setenv("GITHUB_REPO", "owner/repo")
+
+        def boom(*args, **kwargs):
+            raise requests.ConnectionError("no network")
+
+        monkeypatch.setattr(requests.Session, "request", boom)
+        app = run_app()
+        assert_no_exceptions(app)
+
+    def test_configured_github_store_is_used(self, monkeypatch):
+        monkeypatch.setenv("ODDS_API_KEY", "test-key")
+        monkeypatch.setenv("GITHUB_TOKEN", "tok_abc")
+        monkeypatch.setenv("GITHUB_REPO", "owner/repo")
+
+        from tests.test_store import FakeGitHub
+        fake = FakeGitHub()
+        monkeypatch.setattr("requests.Session.request",
+                            lambda self, *a, **k: fake.request(*a, **k))
+        app = run_app()
+        assert_no_exceptions(app)
+        text = " ".join(s.value for s in app.sidebar.success)
+        assert "owner/repo" in text
+
+
+class TestSaveThroughTheUI:
+    """Clicking Save must actually commit, and grading must write back."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_caches(self):
+        import streamlit as st
+        st.cache_resource.clear()
+        st.cache_data.clear()
+        yield
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+    @pytest.fixture
+    def wired(self, monkeypatch, events, raw_by_event, league, projections, config):
+        from tests.test_store import FakeGitHub
+
+        monkeypatch.setenv("ODDS_API_KEY", "test-key")
+        monkeypatch.setenv("GITHUB_TOKEN", "tok_abc")
+        monkeypatch.setenv("GITHUB_REPO", "owner/repo")
+        fake = FakeGitHub()
+        monkeypatch.setattr("requests.Session.request",
+                            lambda self, *a, **k: fake.request(*a, **k))
+        state = dict(
+            config=config, events=events, raw_by_event=raw_by_event,
+            teams_raw=league, projections=projections,
+            projection_filename="week-2.csv", projection_warnings=[],
+            odds_fetched_at="2026-09-10T18:00:00+00:00",
+            roster_fetched_at="2026-09-10T18:00:00+00:00",
+            overrides={}, approved_reviews=set(), quota={},
+        )
+        return fake, state
+
+    def test_saving_a_run_commits_it(self, wired):
+        fake, state = wired
+        app = run_app(**state)
+        save = next(b for b in app.button if "Save this run" in b.label)
+        save.click().run()
+        assert_no_exceptions(app)
+
+        saved = [p for p in fake.files["parlay-data"] if p.startswith("runs/")]
+        assert len(saved) == 1, fake.files["parlay-data"].keys()
+        assert any("Save parlay run" in m for m in fake.commit_messages)
+
+    def test_the_committed_record_is_slim(self, wired):
+        """The raw odds blob must not be committed — only picks and config."""
+        import json as _json
+
+        fake, state = wired
+        app = run_app(**state)
+        next(b for b in app.button if "Save this run" in b.label).click().run()
+
+        path = next(p for p in fake.files["parlay-data"] if p.startswith("runs/"))
+        record = _json.loads(fake.files["parlay-data"][path])
+        assert "raw_odds" not in record
+        assert "rosters" not in record
+        assert len(record["picks"]) == 3
+        assert record["config"]["gap_threshold"] == 0.10
+
+    def test_a_saved_run_appears_in_history_on_the_next_render(self, wired):
+        fake, state = wired
+        app = run_app(**state)
+        next(b for b in app.button if "Save this run" in b.label).click().run()
+        assert_no_exceptions(app)
+        # The metric row only renders once at least one run is stored.
+        labels = [m.label for m in app.metric]
+        assert "Leg hit rate" in labels
+
+    def test_saving_settings_commits_the_config(self, wired):
+        fake, state = wired
+        app = run_app(**state)
+        next(b for b in app.sidebar.button if b.label == "💾 Save").click().run()
+        assert_no_exceptions(app)
+        assert "config.json" in fake.files["parlay-data"]
+
+    def test_adding_an_alias_commits_it(self, wired):
+        """An abbreviated name shows in diagnostics; one click stores the fix."""
+        fake, state = wired
+        # "K. Boutte" scores below the fuzzy cutoff against rostered
+        # "Kayshon Boutte", so it must surface as an unmatched near-miss.
+        state["raw_by_event"] = dict(state["raw_by_event"])
+        payload = json.loads(json.dumps(state["raw_by_event"]["evt-cin-ne"]))
+        payload["bookmakers"][0]["markets"].append({
+            "key": "player_rush_yds",
+            "outcomes": [{"name": "Over", "description": "K. Boutte",
+                          "price": -110, "point": 12.5}],
+        })
+        state["raw_by_event"]["evt-cin-ne"] = payload
+
+        app = run_app(**state)
+        assert_no_exceptions(app)
+        alias_buttons = [b for b in app.button if b.label.startswith("Alias →")]
+        assert alias_buttons, "the unmatched name should offer an alias fix"
+
+        alias_buttons[0].click().run()
+        assert_no_exceptions(app)
+        assert "aliases.json" in fake.files["parlay-data"]
+        stored = json.loads(fake.files["parlay-data"]["aliases.json"])
+        assert stored == {"k boutte": "Kayshon Boutte"}

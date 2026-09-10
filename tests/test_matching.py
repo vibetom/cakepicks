@@ -3,6 +3,7 @@
 import pytest
 
 from core.matching import AliasStore, NameMatcher, normalize_name
+from core.store import LocalStore
 from core.teams import ESPN_PRO_TEAM_ID, CANONICAL, normalize_team
 
 
@@ -55,7 +56,7 @@ def matcher(tmp_path):
         "thomas-no": ("Michael Thomas", "NO"),
         "thomas-sea": ("Michael Thomas", "SEA"),
     }
-    return NameMatcher(entries, AliasStore(tmp_path / "aliases.json"), threshold=90)
+    return NameMatcher(entries, AliasStore(LocalStore(tmp_path)), threshold=90)
 
 
 class TestMatching:
@@ -84,7 +85,7 @@ class TestMatching:
 
     def test_fuzzy_accepts_above_threshold(self, tmp_path):
         entries = {"chase": ("Ja'Marr Chase", "CIN")}
-        matcher = NameMatcher(entries, AliasStore(tmp_path / "a.json"), threshold=85)
+        matcher = NameMatcher(entries, AliasStore(LocalStore(tmp_path)), threshold=85)
         result = matcher.match("Jamar Chase", ["CIN"])
         assert result.key == "chase"
         assert result.method == "fuzzy"
@@ -95,7 +96,7 @@ class TestMatching:
 
 class TestAliases:
     def test_alias_resolves_an_otherwise_unmatched_name(self, tmp_path):
-        store = AliasStore(tmp_path / "aliases.json")
+        store = AliasStore(LocalStore(tmp_path))
         entries = {"boutte": ("Kayshon Boutte", "NE")}
         matcher = NameMatcher(entries, store, threshold=95)
         assert not matcher.match("K. Boutte", ["NE"]).matched
@@ -106,12 +107,16 @@ class TestAliases:
         assert result.key == "boutte"
         assert result.method == "alias"
 
-    def test_aliases_persist_to_disk(self, tmp_path):
-        path = tmp_path / "aliases.json"
-        AliasStore(path).add("K. Boutte", "Kayshon Boutte")
-        assert AliasStore(path).get("k boutte") == "Kayshon Boutte"
+    def test_aliases_persist_across_instances(self, tmp_path):
+        backend = LocalStore(tmp_path)
+        AliasStore(backend).add("K. Boutte", "Kayshon Boutte")
+        assert AliasStore(backend).get("k boutte") == "Kayshon Boutte"
 
     def test_corrupt_alias_file_is_ignored(self, tmp_path):
-        path = tmp_path / "aliases.json"
-        path.write_text("{ not json")
-        assert AliasStore(path).as_dict() == {}
+        (tmp_path / "aliases.json").write_text("{ not json")
+        assert AliasStore(LocalStore(tmp_path)).as_dict() == {}
+
+    def test_no_store_means_no_persistence_but_no_crash(self):
+        store = AliasStore(None)
+        assert store.add("K. Boutte", "Kayshon Boutte") is False
+        assert store.get("K. Boutte") == "Kayshon Boutte"   # still applies in-session

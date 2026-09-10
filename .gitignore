@@ -2,8 +2,9 @@
 .env
 .streamlit/secrets.toml
 
-# Local state
+# Local state (the hosted app keeps its copy on the parlay-data branch)
 config.json
+data/config.json
 data/runs/*.json
 !data/runs/.gitkeep
 

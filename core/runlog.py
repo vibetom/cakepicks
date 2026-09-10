@@ -1,16 +1,23 @@
-"""Per-run JSON logs and the season history they feed (§10.7).
+"""Per-run logs and the season history they feed (§10.7).
 
-On a hosted deployment the working directory is usually ephemeral, so writes
-here are best-effort and the UI also offers download/import of the same JSON.
+Two shapes of the same run:
+
+* the **full record**, which includes the raw odds payloads and the roster
+  snapshot, so a week can be reproduced exactly. It is offered as a download
+  and can run to a few megabytes.
+* the **slim record**, which keeps the config, the picks and their grades. That
+  is all the History tab needs, and it is what gets persisted -- a few
+  kilobytes a week rather than a few megabytes.
 """
 
 from __future__ import annotations
 
 import datetime as dt
-import json
-from pathlib import Path
 
-RUNS_DIR = Path("data/runs")
+RUNS_PREFIX = "runs"
+
+# Keys dropped from the full record to make the slim one.
+_BULK_KEYS = ("raw_odds", "rosters", "events")
 
 
 def _sanitize(value):
@@ -63,45 +70,59 @@ def build_run_record(*, config, picks, summary, events, raw_by_event,
     })
 
 
-def write_run(record: dict, runs_dir: Path = RUNS_DIR) -> Path | None:
-    """Persist a run. Returns None if the filesystem is not writable."""
-    try:
-        runs_dir.mkdir(parents=True, exist_ok=True)
-        path = runs_dir / f"{record['nfl_week_label']}-{record['run_id']}.json"
-        path.write_text(json.dumps(record, indent=2))
-        return path
-    except OSError:
-        return None
+def slim_record(record: dict) -> dict:
+    """The persisted shape: drop the raw odds and roster snapshots.
+
+    Diagnostics are reduced to counts for the same reason -- the History tab
+    only reports on picks and grades.
+    """
+    slim = {k: v for k, v in record.items() if k not in _BULK_KEYS}
+    diagnostics = record.get("diagnostics") or {}
+    slim["diagnostics"] = {
+        key: len(value) if isinstance(value, list) else value
+        for key, value in diagnostics.items()
+    }
+    slim["event_count"] = len(record.get("events") or [])
+    return slim
 
 
-def list_runs(runs_dir: Path = RUNS_DIR) -> list[dict]:
-    """All stored runs, newest first. Unreadable files are skipped."""
+def run_path(record: dict) -> str:
+    return f"{RUNS_PREFIX}/{record['nfl_week_label']}-{record['run_id']}.json"
+
+
+def save_run(store, record: dict) -> str | None:
+    """Persist the slim record. Returns its path, or None if the write failed."""
+    path = run_path(record)
+    message = f"Save parlay run {record['nfl_week_label']} ({record['run_id']})"
+    return path if store.write_json(path, slim_record(record), message) else None
+
+
+def list_runs(store) -> list[dict]:
+    """All stored runs, newest first. Unreadable entries are skipped."""
     runs = []
-    if not runs_dir.exists():
-        return runs
-    for path in sorted(runs_dir.glob("*.json"), reverse=True):
-        try:
-            record = json.loads(path.read_text())
-            record["_path"] = str(path)
+    for path in store.list_json(RUNS_PREFIX):
+        record = store.read_json(path)
+        if isinstance(record, dict):
+            record["_path"] = path
             runs.append(record)
-        except (json.JSONDecodeError, OSError):
-            continue
     return runs
 
 
-def update_results(path: str | Path, results: dict) -> bool:
-    """Write Win/Loss/Push grades back into a stored run."""
-    try:
-        path = Path(path)
-        record = json.loads(path.read_text())
-        for pick in record.get("picks", []):
-            key = str(pick.get("team_id"))
-            if key in results:
-                pick["result"] = results[key]
-        path.write_text(json.dumps(record, indent=2))
-        return True
-    except (json.JSONDecodeError, OSError):
+def update_results(store, path: str, results: dict) -> bool:
+    """Write Win/Loss/Push grades back into a stored run.
+
+    `results` maps a stringified team_id to "Win"/"Loss"/"Push"/None.
+    """
+    record = store.read_json(path)
+    if not isinstance(record, dict):
         return False
+    for pick in record.get("picks", []):
+        key = str(pick.get("team_id"))
+        if key in results:
+            pick["result"] = results[key]
+    record.pop("_path", None)
+    label = record.get("nfl_week_label", path)
+    return store.write_json(path, record, f"Grade parlay legs for {label}")
 
 
 def season_totals(runs: list[dict]) -> dict:

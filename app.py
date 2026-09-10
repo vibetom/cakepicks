@@ -21,6 +21,7 @@ from core import scoring
 from core.betslip import leg_link, parlay_link
 from core.config import DEFAULTS, ODDS_TICKS, load_config, save_config
 from core.matching import AliasStore
+from core.store import build_store
 from core.projections import ProjectionError, load_projections
 from core.rosters import RosterError, fetch_league, filter_players, league_url
 from core.selection import score_props, select_picks
@@ -34,16 +35,56 @@ st.set_page_config(page_title="League Parlay Bot", page_icon="🏈", layout="wid
 # Secrets
 # --------------------------------------------------------------------------
 
-def get_api_key() -> str | None:
-    """The Odds API key, from Streamlit secrets or the environment."""
+def get_secret(name: str) -> str:
+    """A secret from Streamlit's vault, falling back to the environment."""
     try:
-        key = st.secrets.get("ODDS_API_KEY")
-        if key:
-            return str(key).strip()
+        value = st.secrets.get(name)
+        if value:
+            return str(value).strip()
     except Exception:
         pass  # no secrets.toml present; fall through to the environment
-    key = os.environ.get("ODDS_API_KEY")
-    return key.strip() if key else None
+    return (os.environ.get(name) or "").strip()
+
+
+def get_api_key() -> str | None:
+    return get_secret("ODDS_API_KEY") or None
+
+
+@st.cache_resource(show_spinner=False)
+def get_store(token_fingerprint: str, repo: str, branch: str):
+    """The persistence backend, built once per configuration.
+
+    Cached on the *configuration* rather than the token itself so that a
+    changed secret rebuilds the store, while ordinary reruns reuse the same
+    HTTP session.
+    """
+    return build_store(
+        {"GITHUB_TOKEN": get_secret("GITHUB_TOKEN"),
+         "GITHUB_REPO": repo,
+         "GITHUB_DATA_BRANCH": branch},
+        root="data",
+    )
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _store_status(label: str) -> tuple[bool, str]:
+    """Cached because check() costs an HTTP round trip on the GitHub backend."""
+    return store.check()
+
+
+def store_status() -> tuple[bool, str]:
+    try:
+        return _store_status(store.label)
+    except Exception as exc:            # never let a status probe break the app
+        return False, f"Storage check failed: {exc}"
+
+
+def current_store():
+    token = get_secret("GITHUB_TOKEN")
+    repo = get_secret("GITHUB_REPO")
+    branch = get_secret("GITHUB_DATA_BRANCH") or "parlay-data"
+    fingerprint = f"{len(token)}:{token[-4:] if token else ''}"
+    return get_store(fingerprint, repo, branch)
 
 
 # --------------------------------------------------------------------------
@@ -52,7 +93,8 @@ def get_api_key() -> str | None:
 
 def init_state() -> None:
     defaults = {
-        "config": load_config(),
+        "config": load_config(store),
+        "aliases": AliasStore(store),
         "events": [],
         "raw_by_event": {},
         "odds_fetched_at": None,
@@ -71,9 +113,10 @@ def init_state() -> None:
         st.session_state.setdefault(key, value)
 
 
+store, store_warning = current_store()
 init_state()
 config = st.session_state.config
-aliases = AliasStore()
+aliases = st.session_state.aliases
 
 
 # --------------------------------------------------------------------------
@@ -178,9 +221,35 @@ def render_sidebar() -> dict:
             format_func=lambda m: scoring.MARKET_LABELS.get(m, m),
             help="Fewer markets = fewer API credits per run.")
 
-    if st.sidebar.button("Reset to defaults", width="stretch"):
-        st.session_state.config = dict(DEFAULTS)
-        st.rerun()
+    save_col, reset_col = st.sidebar.columns(2)
+    with save_col:
+        if st.button("💾 Save", width="stretch",
+                     help="Store these values so they come back next time."):
+            if save_config(new, store):
+                st.toast("Settings saved.")
+            else:
+                st.toast("Couldn't save settings — see the Storage note below.")
+    with reset_col:
+        if st.button("Reset", width="stretch"):
+            st.session_state.config = dict(DEFAULTS)
+            st.rerun()
+
+    st.sidebar.divider()
+    with st.sidebar.expander("Storage", expanded=False):
+        if store_warning:
+            st.warning(store_warning)
+        healthy, message = store_status()
+        if not healthy:
+            st.error(message)
+        elif store.persistent:
+            st.success(message)
+        else:
+            st.info(message)
+        if not store.persistent:
+            st.caption(
+                "Set GITHUB_TOKEN and GITHUB_REPO in your app's secrets to keep "
+                "history between restarts. See the README."
+            )
 
     quota = st.session_state.quota or {}
     if quota.get("remaining") is not None:
@@ -195,7 +264,6 @@ new_config = render_sidebar()
 if new_config != config:
     st.session_state.config = new_config
     config = new_config
-    save_config(config)
 
 
 # --------------------------------------------------------------------------
@@ -571,7 +639,8 @@ with tab_diag:
             )
             if item.get("closest"):
                 if st.button(f"Alias → {item['closest']}", key=f"alias-{index}"):
-                    aliases.add(item["name"], item["closest"])
+                    if not aliases.add(item["name"], item["closest"]):
+                        st.toast("Alias applied for this session but not saved.")
                     st.rerun()
 
     st.subheader("Roster exclusions")
@@ -615,10 +684,14 @@ with tab_diag:
 # --------------------------------------------------------------------------
 
 with tab_history:
+    healthy, message = store_status()
+    (st.success if healthy and store.persistent else st.info)(message)
+
     st.subheader("Save this run")
     st.caption(
-        "A run log holds the config, the raw odds, the rosters and the picks, so "
-        "the week can be reproduced and graded later."
+        "Saving keeps the config, the picks and (later) their Win/Loss grades. "
+        "The download is the complete record, raw odds included, for reproducing "
+        "a week exactly."
     )
     record = runlog.build_run_record(
         config=config, picks=picks, summary=summary, events=events,
@@ -629,25 +702,31 @@ with tab_history:
     )
     save_col, download_col = st.columns(2)
     with save_col:
-        if st.button("💾 Save run to data/runs/", width="stretch"):
-            path = runlog.write_run(record)
+        if st.button("💾 Save this run", width="stretch", type="primary"):
+            try:
+                path = runlog.save_run(store, record)
+            except Exception as exc:
+                path = None
+                st.error(str(exc))
             if path:
-                st.success(f"Saved {path}")
+                st.success(f"Saved to {store.label} → `{path}`")
+                st.cache_data.clear()
             else:
-                st.error("Couldn't write to disk (read-only host). Use the download instead.")
+                st.warning("Couldn't save. Use the download button instead.")
     with download_col:
         st.download_button(
-            "⬇️ Download run log (JSON)", json.dumps(record, indent=2),
+            "⬇️ Download full run log (JSON)", json.dumps(record, indent=2),
             file_name=f"{record['nfl_week_label']}-{record['run_id']}.json",
             mime="application/json", width="stretch",
         )
-    st.caption(
-        "On a hosted deployment the disk is wiped when the app restarts. Download "
-        "the run log if you want a permanent record."
-    )
 
     st.subheader("Past runs")
-    runs = runlog.list_runs()
+    try:
+        runs = runlog.list_runs(store)
+    except Exception as exc:
+        runs = []
+        st.error(f"Couldn't read saved runs: {exc}")
+
     imported = st.file_uploader("Import a downloaded run log", type=["json"],
                                 key="import-run")
     if imported is not None:
@@ -668,32 +747,41 @@ with tab_history:
             f"{totals['leg_hit_rate']:.1%}" if totals["leg_hit_rate"] is not None else "—",
         )
         cols[3].metric("Parlays hit", f"{totals['parlays_hit']}/{totals['parlays_graded']}")
+        if totals["legs_ungraded"]:
+            st.caption(f"{totals['legs_ungraded']} legs still ungraded.")
 
         for run in runs[:10]:
-            with st.expander(f"{run.get('nfl_week_label')} · {run.get('created_at', '')[:16]}"):
+            label = f"{run.get('nfl_week_label')} · {run.get('created_at', '')[:16]}"
+            with st.expander(label):
                 grades = {}
                 for pick_row in run.get("picks", []):
                     prop = pick_row.get("pick")
-                    label = (f"{pick_row['team_name']} — "
-                             + (f"{prop.get('player_name_espn') or prop.get('player_name')} "
-                                f"{parlay_mod.describe_prop(prop)} "
-                                f"({scoring.format_american(prop['price'])})"
-                                if prop else "NONE"))
+                    leg_label = (f"{pick_row['team_name']} — "
+                                 + (f"{prop.get('player_name_espn') or prop.get('player_name')} "
+                                    f"{parlay_mod.describe_prop(prop)} "
+                                    f"({scoring.format_american(prop['price'])})"
+                                    if prop else "NONE"))
                     if not prop:
-                        st.write(label)
+                        st.write(leg_label)
                         continue
                     current = pick_row.get("result") or "Ungraded"
                     choices = ["Ungraded", "Win", "Loss", "Push"]
                     grade = st.selectbox(
-                        label, choices, index=choices.index(current)
-                        if current in choices else 0,
+                        leg_label, choices,
+                        index=choices.index(current) if current in choices else 0,
                         key=f"grade-{run.get('run_id')}-{pick_row['team_id']}",
                     )
                     grades[str(pick_row["team_id"])] = None if grade == "Ungraded" else grade
-                if run.get("_path") and st.button(
-                    "Save grades", key=f"save-grades-{run.get('run_id')}"
-                ):
-                    if runlog.update_results(run["_path"], grades):
+
+                if not run.get("_path"):
+                    st.caption("Imported run — save it to grade it.")
+                elif st.button("Save grades", key=f"save-grades-{run.get('run_id')}"):
+                    try:
+                        saved = runlog.update_results(store, run["_path"], grades)
+                    except Exception as exc:
+                        saved = False
+                        st.error(str(exc))
+                    if saved:
                         st.success("Grades saved.")
-                    else:
-                        st.error("Couldn't write grades to disk.")
+                        st.cache_data.clear()
+                        st.rerun()

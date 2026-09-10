@@ -121,39 +121,62 @@ class TestRunLog:
                   "none_reason": "bye"}]
         return runlog.build_run_record(
             config=config, picks=picks, summary=combine(picks, 10.0),
-            events=[], raw_by_event={}, teams=[], diagnostics={},
+            events=[{"id": "e1"}], raw_by_event={"e1": {"big": "payload"}},
+            teams=[{"team_id": 1}], diagnostics={"unmatched_props": [1, 2]},
             coverage={}, odds_fetched_at="2026-09-10T18:00:00+00:00")
 
     def test_record_is_json_serializable(self, config):
         record = self._record(config)
         assert json.loads(json.dumps(record))["picks"][0]["team_name"] == "A"
 
-    def test_write_and_read_round_trip(self, tmp_path, config):
-        path = runlog.write_run(self._record(config), tmp_path)
-        assert path and path.exists()
-        runs = runlog.list_runs(tmp_path)
+    def test_slim_record_drops_the_bulky_payloads(self, config):
+        """History only needs picks and grades, not megabytes of raw odds."""
+        slim = runlog.slim_record(self._record(config))
+        assert "raw_odds" not in slim and "rosters" not in slim
+        assert slim["picks"][0]["team_name"] == "A"
+        assert slim["diagnostics"]["unmatched_props"] == 2
+        assert slim["event_count"] == 1
+
+    def test_save_and_read_round_trip(self, store, config):
+        path = runlog.save_run(store, self._record(config))
+        assert path and path.startswith("runs/")
+        runs = runlog.list_runs(store)
         assert len(runs) == 1 and runs[0]["picks"][0]["team_name"] == "A"
 
-    def test_grades_are_written_back(self, tmp_path, config):
-        path = runlog.write_run(self._record(config), tmp_path)
-        assert runlog.update_results(path, {"1": "Win"})
-        assert runlog.list_runs(tmp_path)[0]["picks"][0]["result"] == "Win"
+    def test_saved_run_excludes_raw_odds(self, store, config):
+        runlog.save_run(store, self._record(config))
+        assert "raw_odds" not in runlog.list_runs(store)[0]
 
-    def test_season_totals(self, tmp_path, config):
-        runlog.write_run(self._record(config), tmp_path)
-        path = runlog.list_runs(tmp_path)[0]["_path"]
-        runlog.update_results(path, {"1": "Win"})
-        totals = runlog.season_totals(runlog.list_runs(tmp_path))
+    def test_grades_are_written_back(self, store, config):
+        path = runlog.save_run(store, self._record(config))
+        assert runlog.update_results(store, path, {"1": "Win"})
+        assert runlog.list_runs(store)[0]["picks"][0]["result"] == "Win"
+
+    def test_grading_a_missing_run_fails_cleanly(self, store):
+        assert runlog.update_results(store, "runs/nope.json", {"1": "Win"}) is False
+
+    def test_season_totals(self, store, config):
+        path = runlog.save_run(store, self._record(config))
+        runlog.update_results(store, path, {"1": "Win"})
+        totals = runlog.season_totals(runlog.list_runs(store))
         assert totals["legs_won"] == 1
         assert totals["leg_hit_rate"] == pytest.approx(1.0)
         assert totals["parlays_hit"] == 1
 
-    def test_ungraded_runs_do_not_count_as_parlays(self, tmp_path, config):
-        runlog.write_run(self._record(config), tmp_path)
-        totals = runlog.season_totals(runlog.list_runs(tmp_path))
+    def test_ungraded_runs_do_not_count_as_parlays(self, store, config):
+        runlog.save_run(store, self._record(config))
+        totals = runlog.season_totals(runlog.list_runs(store))
         assert totals["parlays_graded"] == 0
         assert totals["leg_hit_rate"] is None
 
-    def test_corrupt_run_file_is_skipped(self, tmp_path):
-        (tmp_path / "broken.json").write_text("{ nope")
-        assert runlog.list_runs(tmp_path) == []
+    def test_a_lost_leg_sinks_the_parlay(self, store, config):
+        path = runlog.save_run(store, self._record(config))
+        runlog.update_results(store, path, {"1": "Loss"})
+        totals = runlog.season_totals(runlog.list_runs(store))
+        assert totals["parlays_hit"] == 0
+        assert totals["parlays_graded"] == 1
+
+    def test_corrupt_run_file_is_skipped(self, store, tmp_path):
+        (tmp_path / "runs").mkdir()
+        (tmp_path / "runs" / "broken.json").write_text("{ nope")
+        assert runlog.list_runs(store) == []

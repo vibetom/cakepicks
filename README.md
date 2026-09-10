@@ -88,12 +88,52 @@ it as compromised. Log in at [the-odds-api.com](https://the-odds-api.com),
 regenerate the key, and update it in **⋮ → Settings → Secrets**. Nothing else
 needs to change.
 
+### Step 6 — Make your history permanent (recommended)
+
+Streamlit's disk is wiped every time the app restarts, so saved runs would
+vanish. To keep them, let the app commit its history back to this repository.
+It writes to a separate branch called `parlay-data` that holds **no code**, so
+saving data never redeploys your app.
+
+You need a GitHub token that can write to this one repo, and nothing else:
+
+1. On GitHub, click your avatar → **Settings** (your account settings, not the
+   repository's).
+2. Scroll to the bottom of the left sidebar → **Developer settings**.
+3. **Personal access tokens → Fine-grained tokens → Generate new token**.
+4. Fill it in:
+   - **Token name:** `parlay-bot`
+   - **Expiration:** 1 year (you'll need to redo this when it expires)
+   - **Repository access:** choose **Only select repositories**, then pick `cakepicks`
+   - **Permissions → Repository permissions → Contents:** change to **Read and write**
+5. Click **Generate token** and copy it. It starts with `github_pat_` and is shown
+   **only once**.
+6. Back in your app: **⋮ → Settings → Secrets**, and add two more lines so the box
+   reads:
+
+   ```toml
+   ODDS_API_KEY = "your_odds_key"
+   GITHUB_TOKEN = "github_pat_your_token_here"
+   GITHUB_REPO  = "vibetom/cakepicks"
+   ```
+
+7. Save. The app restarts, and the sidebar's **Storage** section should turn green
+   with "Saving to GitHub".
+
+From then on, **💾 Save this run** in the History tab commits that week to the
+`parlay-data` branch, and your Win/Loss grades and season totals survive
+restarts. You can browse the files on GitHub, and even fix a grade by editing
+the JSON there directly.
+
+If you skip this step nothing breaks — the app just falls back to local disk and
+tells you so, and the Download buttons still let you keep records by hand.
+
 ### Things to know about free hosting
 
 | Behavior | What it means for you |
 |---|---|
 | The app sleeps after ~12 hours idle | The next visitor wakes it; takes ~30 seconds. Normal. |
-| The disk is wiped on every restart | Saved run logs, aliases and slider settings do **not** survive. Use the **Download** buttons in the app to keep anything you care about, and re-upload it later. |
+| The disk is wiped on every restart | By default, saved runs, aliases and settings do **not** survive. Step 6 fixes this permanently. |
 | Anyone who can view it can spend your credits | Hence Step 4. |
 
 ---
@@ -115,6 +155,8 @@ needs to change.
 6. **Check the "Review & overrides" tab** if any leg is flagged 🚩, and swap in
    an alternative for any team you disagree with.
 7. **Copy the share block** into your league chat, and place the bet at FanDuel.
+8. **Hit "💾 Save this run"** in the History tab. Once the games finish, come back
+   and mark each leg Win/Loss/Push — the season totals build up from there.
 
 Free tier is 500 credits/month, so about 4–5 full fetches. If you're running
 short, trim the **Markets to fetch** list under **Misc** in the sidebar.
@@ -213,6 +255,10 @@ persist properly, since the disk isn't ephemeral.
 | Lots of empty slots | See "Why you may see a lot of NONE" above — usually the odds floor. |
 | A player's props are ignored | Check the **Diagnostics** tab for unmatched names and click "Alias →" to fix it. |
 | Repo doesn't show up in Streamlit | Streamlit's GitHub authorization doesn't cover it. Re-authorize and grant access to the repo. |
+| Storage says "token lacks Contents: Read and write" | The fine-grained token was created without write permission. Regenerate it with **Contents: Read and write** (Step 6.4). |
+| Storage says "GitHub rejected the token (401)" | The token expired or was mistyped. Generate a new one and update `GITHUB_TOKEN` in Secrets. |
+| Storage says "could not find ... (404)" | `GITHUB_REPO` is wrong, or the token wasn't granted access to that specific repository. |
+| History is empty after a restart | You're on local-disk storage. Do Step 6. |
 
 ---
 
@@ -232,11 +278,15 @@ core/
   parlay.py         Combined odds, payout, share text
   betslip.py        Best-effort FanDuel deep links
   runlog.py         Run logs and season history
+  store.py          Persistence: local disk, or commits to the parlay-data branch
 tests/              Test suite; run with `pytest`
-data/
+data/               Local-disk fallback storage
   aliases.json      Your name-match overrides
   runs/             Saved run logs
 ```
+
+With GitHub storage configured, those same files live on the `parlay-data`
+branch instead, and the local `data/` directory is only a fallback.
 
 The odds vendor sits behind an `OddsProvider` interface, so swapping it doesn't
 touch the scoring or selection code.

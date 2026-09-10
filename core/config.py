@@ -6,11 +6,6 @@ change, so nothing in the selection path reads a literal -- it reads this dict.
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
-CONFIG_PATH = Path("config.json")
-
 # Standard sportsbook prices, used for the odds-floor control. American odds
 # have no valid values strictly between -100 and +100, so a plain slider would
 # offer impossible prices; the UI uses these ticks instead.
@@ -52,36 +47,37 @@ DEFAULTS = {
 }
 
 
-def load_config(path: str | Path = CONFIG_PATH) -> dict:
+CONFIG_FILE = "config.json"
+
+
+def load_config(store=None) -> dict:
     """Defaults overlaid with anything previously saved.
 
-    Unknown keys in the saved file are ignored, so an older config.json never
-    breaks a newer build.
+    Unknown keys in the saved document are ignored, so an older saved config
+    never breaks a newer build.
     """
     config = dict(DEFAULTS)
-    path = Path(path)
-    if path.exists():
-        try:
-            saved = json.loads(path.read_text() or "{}")
-            for key, value in saved.items():
-                if key in DEFAULTS:
-                    config[key] = value
-        except (json.JSONDecodeError, OSError):
-            pass
+    if store is None:
+        return config
+    try:
+        saved = store.read_json(CONFIG_FILE)
+    except Exception:
+        return config
+    if isinstance(saved, dict):
+        for key, value in saved.items():
+            if key in DEFAULTS:
+                config[key] = value
     return config
 
 
-def save_config(config: dict, path: str | Path = CONFIG_PATH) -> bool:
-    """Persist the tunables. Returns False on a read-only filesystem.
+def save_config(config: dict, store) -> bool:
+    """Persist the tunables. Returns False when the store could not write.
 
-    Hosted deployments often have an ephemeral or read-only working directory;
-    failing to save settings must never break a run.
+    Only called from an explicit "Save settings" action -- autosaving on every
+    slider drag would spam the history with commits.
     """
+    payload = {k: v for k, v in config.items() if k in DEFAULTS}
     try:
-        Path(path).write_text(
-            json.dumps({k: v for k, v in config.items() if k in DEFAULTS},
-                       indent=2, sort_keys=True)
-        )
-        return True
-    except OSError:
+        return store.write_json(CONFIG_FILE, payload, "Update parlay bot settings")
+    except Exception:
         return False
