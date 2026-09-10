@@ -7,6 +7,9 @@ config.json
 data/config.json
 data/runs/*.json
 !data/runs/.gitkeep
+data/odds/
+data/rosters/
+data/projections/
 
 # Python
 .venv/

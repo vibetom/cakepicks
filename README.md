@@ -120,9 +120,10 @@ You need a GitHub token that can write to this one repo, and nothing else:
 7. Save. The app restarts, and the sidebar's **Storage** section should turn green
    with "Saving to GitHub".
 
-From then on, **💾 Save this run** in the History tab commits that week to the
-`parlay-data` branch, and your Win/Loss grades and season totals survive
-restarts. You can browse the files on GitHub, and even fix a grade by editing
+From then on the app saves its odds snapshot, rosters and projections there
+automatically, and reloads them on the next start — so restarts stop costing
+credits. **💾 Save this run** in the History tab commits that week's picks too,
+and your Win/Loss grades and season totals survive restarts. You can browse the files on GitHub, and even fix a grade by editing
 the JSON there directly.
 
 If you skip this step nothing breaks — the app just falls back to local disk and
@@ -133,7 +134,7 @@ tells you so, and the Download buttons still let you keep records by hand.
 | Behavior | What it means for you |
 |---|---|
 | The app sleeps after ~12 hours idle | The next visitor wakes it; takes ~30 seconds. Normal. |
-| The disk is wiped on every restart | By default, saved runs, aliases and settings do **not** survive. Step 6 fixes this permanently. |
+| The disk is wiped on every restart | By default, saved runs, odds snapshots, aliases and settings do **not** survive — meaning a restart would cost you another ~100 API credits. Step 6 fixes this permanently, and is the main reason to do it. |
 | Anyone who can view it can spend your credits | Hence Step 4. |
 
 ---
@@ -148,6 +149,12 @@ tells you so, and the Download buttons still let you keep records by hand.
 3. **Click "Fetch fresh odds."** This is the only action that spends API credits
    (roughly 7 per game, so ~100 for a full slate). It also reloads your ESPN
    rosters, which is free.
+
+   Every fetch is saved, and the app **reloads it automatically the next time it
+   starts** — so restarting, editing a secret, or coming back tomorrow costs
+   nothing. The status line says "restored, no credits spent" when that happens,
+   and warns you once the odds are more than a day old. Fetch again before you
+   actually place the bet; lines move.
 4. **Read the table.** One row per fantasy team, with the prop, the FanDuel
    price, the score, and the tier.
 5. **Move the sliders** to taste. Re-scoring is instant and **never** re-calls
@@ -262,6 +269,9 @@ persist properly, since the disk isn't ephemeral.
 | Storage says "GitHub rejected the token (401)" | The token expired or was mistyped. Generate a new one and update `GITHUB_TOKEN` in Secrets. |
 | Storage says "could not find ... (404)" | `GITHUB_REPO` is wrong, or the token wasn't granted access to that specific repository. |
 | History is empty after a restart | You're on local-disk storage. Do Step 6. |
+| Asked to fetch odds again after every restart | Same cause — without Step 6 the saved snapshot is wiped with the disk. |
+| "The odds snapshot is N MB, too large to store" | A very large slate. Uncheck a market or two under **Markets** and fetch again. |
+| "All games fall outside your date window" | The saved snapshot is from a previous week, or the games have kicked off. Widen the dates or fetch fresh odds. |
 
 ---
 

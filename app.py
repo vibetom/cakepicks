@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 from core import odds as odds_mod
 from core import parlay as parlay_mod
 from core import runlog
+from core import snapshots
 from core import scoring
 from core.betslip import leg_link, parlay_link
 from core.config import DEFAULTS, ODDS_TICKS, load_config, save_config
@@ -92,23 +93,80 @@ def current_store():
 # Session state
 # --------------------------------------------------------------------------
 
+def restore_saved_state() -> dict:
+    """Rebuild the last session from storage, so a restart costs nothing.
+
+    Streamlit restarts on every code change, secrets edit, and idle timeout.
+    Refetching odds after each one would burn ~100 of the 500 monthly credits,
+    so the last snapshot is loaded automatically and clearly labelled with its
+    age. Fetching fresh odds is always one click away.
+    """
+    restored = {"events": [], "raw_by_event": {}, "odds_fetched_at": None,
+                "teams_raw": None, "roster_fetched_at": None,
+                "projections": None, "projection_filename": None,
+                "projection_warnings": [], "restored": []}
+
+    odds = snapshots.load_odds(store)
+    if odds:
+        restored["events"] = odds.get("events") or []
+        restored["raw_by_event"] = odds.get("raw_by_event") or {}
+        restored["odds_fetched_at"] = odds.get("fetched_at") or odds.get("saved_at")
+        restored["odds_saved_at"] = odds.get("saved_at")
+        restored["restored"].append("odds")
+
+    rosters = snapshots.load_rosters(store)
+    if rosters:
+        restored["teams_raw"] = rosters.get("teams")
+        restored["roster_fetched_at"] = rosters.get("fetched_at") or rosters.get("saved_at")
+        restored["restored"].append("rosters")
+
+    frame, meta = snapshots.load_projections(store)
+    if frame is not None:
+        restored["projections"] = frame
+        restored["projection_filename"] = meta.get("filename")
+        restored["projection_warnings"] = meta.get("warnings") or []
+        restored["projections_saved_at"] = meta.get("saved_at")
+        restored["restored"].append("projections")
+
+    return restored
+
+
 def init_state() -> None:
+    """Seed session state, restoring the last snapshot for anything absent.
+
+    Every key is filled with setdefault so a caller (or a test) can pre-seed
+    state and have it survive. The store is only read when nothing is seeded,
+    which keeps a rerun from re-reading GitHub on every interaction.
+    """
+    seeded = any(key in st.session_state
+                 for key in ("raw_by_event", "teams_raw", "projections"))
+    saved = ({"events": [], "raw_by_event": {}, "odds_fetched_at": None,
+              "teams_raw": None, "roster_fetched_at": None, "projections": None,
+              "projection_filename": None, "projection_warnings": [],
+              "restored": []}
+             if seeded else restore_saved_state())
+
     defaults = {
         "config": load_config(store),
         "aliases": AliasStore(store),
-        "events": [],
-        "raw_by_event": {},
-        "odds_fetched_at": None,
+        "events": saved["events"],
+        "raw_by_event": saved["raw_by_event"],
+        "odds_fetched_at": saved["odds_fetched_at"],
+        "odds_saved_at": saved.get("odds_saved_at"),
         "quota": {},
-        "teams_raw": None,
-        "roster_fetched_at": None,
-        "projections": None,
-        "projection_warnings": [],
-        "projection_filename": None,
+        "teams_raw": saved["teams_raw"],
+        "roster_fetched_at": saved["roster_fetched_at"],
+        "projections": saved["projections"],
+        "projection_warnings": saved["projection_warnings"],
+        "projection_filename": saved["projection_filename"],
+        "projections_saved_at": saved.get("projections_saved_at"),
         "overrides": {},
         "approved_reviews": set(),
         "last_run_path": None,
         "last_error": None,
+        "restored_from_storage": saved["restored"],
+        "saved_odds_available": "odds" in saved["restored"],
+        "snapshot_note": None,
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -324,11 +382,25 @@ def fetch_odds(window_start: dt.datetime, window_end: dt.datetime) -> None:
                           text=f"Fetching FanDuel props… {index}/{len(events)} games")
     progress.empty()
 
+    fetched_at = dt.datetime.now(dt.timezone.utc).isoformat()
     st.session_state.events = events
     st.session_state.raw_by_event = raw
-    st.session_state.odds_fetched_at = dt.datetime.now(dt.timezone.utc).isoformat()
+    st.session_state.odds_fetched_at = fetched_at
     st.session_state.quota = provider.quota
     st.session_state.last_error = "; ".join(failures) if failures else None
+
+    # Save immediately: this snapshot is the expensive artefact, and a restart
+    # without it means paying for the same week twice.
+    saved, note = snapshots.save_odds(
+        store, events=events, raw_by_event=raw, markets=config["markets"],
+        fetched_at=fetched_at,
+        window={"start": window_start.isoformat(), "end": window_end.isoformat()},
+    )
+    st.session_state.odds_saved_at = fetched_at if saved else None
+    st.session_state.saved_odds_available = bool(saved)
+    st.session_state.snapshot_note = note
+    # A fresh fetch is live data, not a restore.
+    st.session_state.restored_from_storage = []
 
 
 def fetch_rosters() -> None:
@@ -337,6 +409,8 @@ def fetch_rosters() -> None:
         league_id=int(config["league_id"]), year=int(config["season_year"])
     )
     st.session_state.roster_fetched_at = dt.datetime.now(dt.timezone.utc).isoformat()
+    snapshots.save_rosters(store, teams=st.session_state.teams_raw,
+                           fetched_at=st.session_state.roster_fetched_at)
 
 
 # --------------------------------------------------------------------------
@@ -370,6 +444,10 @@ with setup:
             st.session_state.projections = frame
             st.session_state.projection_warnings = warnings
             st.session_state.projection_filename = uploaded.name
+            st.session_state.projections_saved_at = dt.datetime.now(
+                dt.timezone.utc).isoformat()
+            snapshots.save_projections(store, frame=frame, filename=uploaded.name,
+                                       warnings=warnings)
         except ProjectionError as exc:
             st.session_state.projections = None
             st.session_state.projection_filename = None
@@ -396,6 +474,18 @@ with actions:
              f"({estimate} markets × 1 region).",
     )
     reload_clicked = st.button("👥 Reload rosters only (free)", width="stretch")
+    if st.session_state.get("saved_odds_available"):
+        if st.button("↩️ Reload saved odds (free)", width="stretch",
+                     help="Go back to the last saved snapshot without spending "
+                          "credits — useful if a fetch returned less than you "
+                          "expected."):
+            restored = restore_saved_state()
+            for key in ("events", "raw_by_event", "odds_fetched_at", "teams_raw",
+                        "roster_fetched_at", "projections", "projection_filename",
+                        "projection_warnings"):
+                st.session_state[key] = restored[key]
+            st.session_state.restored_from_storage = restored["restored"]
+            st.rerun()
 
 if fetch_clicked:
     with st.spinner("Loading ESPN rosters…"):
@@ -551,18 +641,50 @@ ready = bool(
     and st.session_state.projections is not None
 )
 
+restored_kinds = set(st.session_state.get("restored_from_storage") or [])
 status = st.columns(3)
-status[0].caption(
-    f"**Odds snapshot:** {snapshot_age(st.session_state.odds_fetched_at)}"
-    + (f" · {len(st.session_state.raw_by_event)} games" if st.session_state.raw_by_event else "")
-)
-status[1].caption(
-    f"**Rosters:** {snapshot_age(st.session_state.roster_fetched_at)}"
-    + (f" · {len(st.session_state.teams_raw)} teams" if st.session_state.teams_raw else "")
-)
-status[2].caption(
-    f"**Projections:** {st.session_state.projection_filename or 'not uploaded'}"
-)
+
+odds_note = f"**Odds snapshot:** {snapshot_age(st.session_state.odds_fetched_at)}"
+if st.session_state.raw_by_event:
+    odds_note += f" · {len(st.session_state.raw_by_event)} games"
+if "odds" in restored_kinds:
+    odds_note += " · restored, no credits spent"
+status[0].caption(odds_note)
+
+roster_note = f"**Rosters:** {snapshot_age(st.session_state.roster_fetched_at)}"
+if st.session_state.teams_raw:
+    roster_note += f" · {len(st.session_state.teams_raw)} teams"
+if "rosters" in restored_kinds:
+    roster_note += " · restored"
+status[1].caption(roster_note)
+
+projection_note = f"**Projections:** {st.session_state.projection_filename or 'not uploaded'}"
+if "projections" in restored_kinds:
+    projection_note += " · restored"
+status[2].caption(projection_note)
+
+if st.session_state.get("snapshot_note"):
+    st.warning(st.session_state.snapshot_note)
+
+if restored_kinds and not store.persistent:
+    st.caption(
+        "These came from local disk. On the hosted app that is wiped on restart — "
+        "set up GitHub storage (README Step 6) to make restoring survive a reboot."
+    )
+
+# Odds go stale as books move lines, and the projections file is weekly.
+odds_hours = snapshots.age_in_hours(st.session_state.odds_fetched_at)
+if odds_hours is not None and odds_hours > 24:
+    st.warning(
+        f"These odds are {odds_hours / 24:.1f} days old. Lines move — fetch fresh "
+        "odds before you actually place the bet."
+    )
+projection_hours = snapshots.age_in_hours(st.session_state.get("projections_saved_at"))
+if projection_hours is not None and projection_hours > 24 * 6:
+    st.warning(
+        f"The projections file was uploaded {projection_hours / 24:.0f} days ago, so "
+        "it is probably last week's. Re-export this week's PFF file."
+    )
 
 if not ready:
     missing = []
@@ -575,7 +697,24 @@ if not ready:
     st.info("To build a parlay: " + ", then ".join(missing) + ".")
     st.stop()
 
-events = st.session_state.events
+# Re-filter every render, not just at fetch time: a restored snapshot may hold
+# games that have since kicked off (§13) or fall outside a window the user has
+# just changed.
+all_events = st.session_state.events
+events = odds_mod.filter_events(all_events, window_start, window_end)
+if all_events and not events:
+    st.error(
+        f"All {len(all_events)} games in the loaded odds fall outside your date "
+        "window — they have already kicked off, or the snapshot is from another "
+        "week. Widen the dates above, or fetch fresh odds."
+    )
+    st.stop()
+if len(events) < len(all_events):
+    st.info(
+        f"{len(all_events) - len(events)} of {len(all_events)} games in this snapshot "
+        "are outside the window (already started, or a different week) and are "
+        "being ignored."
+    )
 playing = odds_mod.playing_team_codes(events)
 teams = filter_players(
     st.session_state.teams_raw, playing,

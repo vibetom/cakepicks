@@ -31,6 +31,9 @@ BRANCH_README = """# parlay-data
 Saved state for the League Parlay Bot, written by the app.
 
 - `runs/` — one JSON per saved run: config, picks, and Win/Loss/Push grades.
+- `odds/latest.json` — the last odds snapshot, so a restart costs no API credits.
+- `rosters/latest.json` — the last ESPN roster pull.
+- `projections/latest.json` — the last PFF file, so it need not be re-uploaded.
 - `aliases.json` — manual name-match overrides.
 - `config.json` — saved slider settings.
 
@@ -41,6 +44,12 @@ triggers a redeploy of the app. Editing these files by hand is fine.
 
 class StoreError(Exception):
     """A persistence failure that the user should be told about."""
+
+
+def _serialize(data: dict, compact: bool) -> str:
+    if compact:
+        return json.dumps(data, separators=(",", ":"))
+    return json.dumps(data, indent=2)
 
 
 class Store(ABC):
@@ -56,8 +65,15 @@ class Store(ABC):
         """Parsed document, or None when it does not exist."""
 
     @abstractmethod
-    def write_json(self, path: str, data: dict, message: str) -> bool:
-        """Persist a document. Returns False when the write was not possible."""
+    def write_json(self, path: str, data: dict, message: str,
+                   compact: bool = False) -> bool:
+        """Persist a document. Returns False when the write was not possible.
+
+        `compact` drops the indentation. Readability is worth the bytes for
+        small documents, but not for the odds snapshot, where indentation is
+        about a third of the size and the file has to stay under GitHub's 1 MB
+        Contents API read ceiling.
+        """
 
     @abstractmethod
     def list_json(self, prefix: str) -> list[str]:
@@ -89,11 +105,12 @@ class LocalStore(Store):
         except (json.JSONDecodeError, OSError):
             return None
 
-    def write_json(self, path: str, data: dict, message: str) -> bool:
+    def write_json(self, path: str, data: dict, message: str,
+                   compact: bool = False) -> bool:
         target = self._path(path)
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(json.dumps(data, indent=2))
+            target.write_text(_serialize(data, compact))
             return True
         except OSError:
             return False
@@ -262,9 +279,10 @@ class GitHubStore(Store):
         payload = response.json()
         return payload.get("sha") if isinstance(payload, dict) else None
 
-    def write_json(self, path: str, data: dict, message: str) -> bool:
+    def write_json(self, path: str, data: dict, message: str,
+                   compact: bool = False) -> bool:
         self._ensure_branch()
-        body = json.dumps(data, indent=2)
+        body = _serialize(data, compact)
         encoded = base64.b64encode(body.encode("utf-8")).decode("ascii")
 
         for attempt in (1, 2):

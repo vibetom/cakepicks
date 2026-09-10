@@ -11,6 +11,8 @@ from pathlib import Path
 import pytest
 from streamlit.testing.v1 import AppTest
 
+from core.odds import DEFAULT_MARKETS
+
 APP = str(Path(__file__).resolve().parents[1] / "app.py")
 TIMEOUT = 60
 
@@ -467,3 +469,165 @@ class TestMarketCheckboxes:
         assert any("No markets selected" in w.value for w in app.sidebar.warning)
         frame = app.dataframe[0].value
         assert all(prop == "NONE" for prop in frame["Prop"])
+
+
+class TestRestoreOnRestart:
+    """A restart must not cost API credits."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_caches(self):
+        import streamlit as st
+        st.cache_resource.clear()
+        st.cache_data.clear()
+        yield
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+    @pytest.fixture
+    def data_dir(self, tmp_path, monkeypatch):
+        """Point the app's local store at a scratch directory."""
+        monkeypatch.setenv("ODDS_API_KEY", "test-key")
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("GITHUB_REPO", raising=False)
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "data").mkdir()
+        return tmp_path / "data"
+
+    def _seed(self, data_dir, events, raw_by_event, league, projections):
+        from core import snapshots
+        from core.store import LocalStore
+
+        store = LocalStore(data_dir)
+        snapshots.save_odds(store, events=events, raw_by_event=raw_by_event,
+                            markets=list(DEFAULT_MARKETS),
+                            fetched_at="2026-09-10T18:00:00+00:00")
+        snapshots.save_rosters(store, teams=league,
+                               fetched_at="2026-09-10T18:00:00+00:00")
+        snapshots.save_projections(store, frame=projections, filename="week-2.csv")
+
+    def test_cold_start_restores_everything(self, data_dir, events, raw_by_event,
+                                            league, projections, monkeypatch):
+        """The bug this fixes: a restart used to demand a fresh paid fetch."""
+        import core.odds as odds_mod
+
+        self._seed(data_dir, events, raw_by_event, league, projections)
+
+        def explode(*args, **kwargs):
+            raise AssertionError("restoring must not call the odds API")
+
+        monkeypatch.setattr(odds_mod.TheOddsAPI, "get_week_events", explode)
+        monkeypatch.setattr(odds_mod.TheOddsAPI, "get_event_props", explode)
+
+        # No pre-seeded session state: this is a genuine cold boot.
+        app = AppTest.from_file(APP, default_timeout=TIMEOUT)
+        app.run()
+        assert_no_exceptions(app)
+
+        frame = app.dataframe[0].value
+        assert len(frame) == 3
+        assert "Chase Lounge" in set(frame["Team"])
+
+    def test_cold_start_says_it_spent_nothing(self, data_dir, events, raw_by_event,
+                                              league, projections):
+        self._seed(data_dir, events, raw_by_event, league, projections)
+        app = AppTest.from_file(APP, default_timeout=TIMEOUT)
+        app.run()
+        assert_no_exceptions(app)
+        captions = " ".join(c.value for c in app.caption)
+        assert "no credits spent" in captions
+        assert "restored" in captions
+
+    def test_cold_start_without_a_snapshot_still_asks_for_input(self, data_dir):
+        app = AppTest.from_file(APP, default_timeout=TIMEOUT)
+        app.run()
+        assert_no_exceptions(app)
+        info = " ".join(e.value for e in app.info)
+        assert "fetch odds" in info
+
+    def test_stale_odds_are_called_out(self, data_dir, events, raw_by_event,
+                                       league, projections):
+        from core import snapshots
+        from core.store import LocalStore
+
+        old = "2026-09-01T18:00:00+00:00"          # well over a day before "now"
+        store = LocalStore(data_dir)
+        snapshots.save_odds(store, events=events, raw_by_event=raw_by_event,
+                            markets=list(DEFAULT_MARKETS), fetched_at=old)
+        snapshots.save_rosters(store, teams=league, fetched_at=old)
+        snapshots.save_projections(store, frame=projections, filename="week-2.csv")
+
+        app = AppTest.from_file(APP, default_timeout=TIMEOUT)
+        app.run()
+        assert_no_exceptions(app)
+        warnings = " ".join(w.value for w in app.warning)
+        assert "days old" in warnings
+        assert "fetch fresh odds" in warnings.lower()
+
+    def test_events_outside_the_window_are_rejected_clearly(
+        self, data_dir, raw_by_event, league, projections
+    ):
+        """A snapshot from last week must say so, not silently produce NONE."""
+        from core import snapshots
+        from core.store import LocalStore
+
+        stale_events = [
+            {"id": "evt-cin-ne", "commence_time": "2020-09-13T17:00:00Z",
+             "home_team": "Cincinnati Bengals", "away_team": "New England Patriots",
+             "home_code": "CIN", "away_code": "NE"},
+            {"id": "evt-gb-chi", "commence_time": "2020-09-13T20:25:00Z",
+             "home_team": "Green Bay Packers", "away_team": "Chicago Bears",
+             "home_code": "GB", "away_code": "CHI"},
+        ]
+        store = LocalStore(data_dir)
+        snapshots.save_odds(store, events=stale_events, raw_by_event=raw_by_event,
+                            markets=list(DEFAULT_MARKETS), fetched_at=None)
+        snapshots.save_rosters(store, teams=league, fetched_at=None)
+        snapshots.save_projections(store, frame=projections, filename="week-2.csv")
+
+        app = AppTest.from_file(APP, default_timeout=TIMEOUT)
+        app.run()
+        assert_no_exceptions(app)
+        errors = " ".join(e.value for e in app.error)
+        assert "outside your date window" in errors
+
+    def test_availability_is_settled_once_not_polled(self, data_dir, events,
+                                                     raw_by_event, league,
+                                                     projections, monkeypatch):
+        """Re-reading the snapshot each rerun would pull ~400 KB from GitHub."""
+        from core import store as store_mod
+
+        self._seed(data_dir, events, raw_by_event, league, projections)
+
+        reads = []
+        original = store_mod.LocalStore.read_json
+
+        def counting_read(self, path):
+            reads.append(path)
+            return original(self, path)
+
+        monkeypatch.setattr(store_mod.LocalStore, "read_json", counting_read)
+
+        app = AppTest.from_file(APP, default_timeout=TIMEOUT)
+        app.run()
+        after_boot = reads.count("odds/latest.json")
+        assert after_boot == 1
+
+        next(s for s in app.slider if "gap threshold" in s.label.lower()).set_value(30).run()
+        assert_no_exceptions(app)
+        assert reads.count("odds/latest.json") == after_boot, \
+            "interacting with a control must not re-read the odds snapshot"
+
+    def test_reload_button_is_offered_when_a_snapshot_exists(
+        self, data_dir, events, raw_by_event, league, projections
+    ):
+        self._seed(data_dir, events, raw_by_event, league, projections)
+        app = AppTest.from_file(APP, default_timeout=TIMEOUT)
+        app.run()
+        assert_no_exceptions(app)
+        assert any("Reload saved odds" in b.label for b in app.button)
+
+    def test_reload_button_is_absent_without_a_snapshot(self, data_dir):
+        app = AppTest.from_file(APP, default_timeout=TIMEOUT)
+        app.run()
+        assert_no_exceptions(app)
+        assert not any("Reload saved odds" in b.label for b in app.button)
