@@ -1,0 +1,25 @@
+{
+  "gap_threshold": 0.1,
+  "ev_threshold": 0.2,
+  "sanity_ceiling": 0.35,
+  "odds_floor": -120,
+  "yards_floor": 25.0,
+  "pass_yards_floor": 175.0,
+  "rush_attempts_floor": 8.0,
+  "receptions_floor": 1.0,
+  "ev_enabled": true,
+  "starters_only": false,
+  "exclude_questionable": false,
+  "exclude_doubtful": true,
+  "stake": 10.0,
+  "season_year": 2026,
+  "league_id": 563635,
+  "fuzzy_threshold": 90,
+  "markets": [
+    "player_reception_yds",
+    "player_rush_yds",
+    "player_pass_yds",
+    "player_anytime_td",
+    "player_pass_tds"
+  ]
+}
