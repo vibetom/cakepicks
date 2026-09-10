@@ -5,6 +5,7 @@ real script and records any exception it raises.
 """
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -143,8 +144,31 @@ class TestFullRender:
         """§6.5: the outsized EV appears as a review card, not as a pick."""
         app = run_app(**loaded)
         assert_no_exceptions(app)
-        approve_buttons = [b for b in app.button if "Approve" in b.label]
-        assert approve_buttons
+        assert [b for b in app.button if b.label.startswith("Use this leg for")]
+
+    def test_review_card_contrasts_the_two_probabilities(self, loaded):
+        """The card must state the disagreement, not just dump the inputs.
+
+        The flagged fixture prop is Josh Jacobs anytime TD at +250: the price
+        implies 28.6%, while lambda = rushTd 0.96 + recvTd 0.10 gives 65.4%.
+        """
+        app = run_app(**loaded)
+        assert_no_exceptions(app)
+        labels = [m.label for m in app.metric]
+        assert "FanDuel's price implies" in labels
+        assert "Your projection implies" in labels
+
+        book = next(m for m in app.metric if m.label == "FanDuel's price implies")
+        model = next(m for m in app.metric if m.label == "Your projection implies")
+        assert book.value == "28.6%"
+        assert model.value == "65.4%"
+        assert model.delta.startswith("+")
+
+    def test_review_card_flags_the_touchdown_clustering_caveat(self, loaded):
+        app = run_app(**loaded)
+        body = " ".join(m.value for m in app.markdown)
+        assert "Touchdowns cluster" in body
+        assert "News the projection can't see" in body
 
     def test_diagnostics_tab_renders(self, loaded):
         app = run_app(**loaded)
@@ -345,3 +369,36 @@ class TestSaveThroughTheUI:
         assert "aliases.json" in fake.files["parlay-data"]
         stored = json.loads(fake.files["parlay-data"]["aliases.json"])
         assert stored == {"k boutte": "Kayshon Boutte"}
+
+
+class TestReviewCardRendering:
+    """Regressions in the sanity card's copy, both found by looking at it."""
+
+    @pytest.fixture
+    def loaded(self, monkeypatch, events, raw_by_event, league, projections, config):
+        monkeypatch.setenv("ODDS_API_KEY", "test-key")
+        return dict(
+            config=config, events=events, raw_by_event=raw_by_event,
+            teams_raw=league, projections=projections,
+            projection_filename="week-2.csv", projection_warnings=[],
+            odds_fetched_at="2026-09-10T18:00:00+00:00",
+            roster_fetched_at="2026-09-10T18:00:00+00:00",
+            overrides={}, approved_reviews=set(), quota={},
+        )
+
+    def test_currency_is_escaped_for_streamlit_markdown(self, loaded):
+        """A bare $ opens LaTeX math and eats the rest of the sentence."""
+        app = run_app(**loaded)
+        assert_no_exceptions(app)
+        sentence = next(m.value for m in app.markdown if "too cheap" in m.value)
+        assert "\\$" in sentence
+        assert "bet returns" in sentence
+        # No unescaped dollar sign may survive anywhere in the sentence.
+        assert not re.search(r"(?<!\\)\$", sentence)
+
+    def test_a_future_odds_timestamp_is_not_negative(self, loaded):
+        """Feed clocks can run ahead of ours; that is skew, not negative time."""
+        app = run_app(**loaded)
+        body = " ".join(m.value for m in app.markdown)
+        assert "Odds age" in body
+        assert "-" not in body.split("Odds age")[1].split(".")[0]

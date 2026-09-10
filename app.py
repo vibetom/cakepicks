@@ -406,15 +406,115 @@ for warning in st.session_state.projection_warnings:
 # --------------------------------------------------------------------------
 
 def snapshot_age(iso: str | None) -> str:
+    """Human-readable age of a timestamp.
+
+    Clamped at zero: a feed timestamp slightly ahead of our clock is ordinary
+    skew, and "-2446 min ago" would be nonsense.
+    """
     if not iso:
         return "never"
-    moment = dt.datetime.fromisoformat(iso)
+    try:
+        moment = dt.datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except ValueError:
+        return "unknown"
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=dt.timezone.utc)
     minutes = (dt.datetime.now(dt.timezone.utc) - moment).total_seconds() / 60
+    if minutes <= 1:
+        return "just now"
     if minutes < 60:
         return f"{minutes:.0f} min ago"
     if minutes < 60 * 24:
         return f"{minutes / 60:.1f} hours ago"
     return f"{minutes / 1440:.1f} days ago"
+
+
+def render_review_card(row: dict, card: dict) -> None:
+    """A sanity-flagged prop, written as a conclusion rather than a data dump.
+
+    The point of the card is a disagreement: the book's price implies one
+    probability, the projection implies another. Showing both side by side is
+    what makes the flag legible, so that comparison leads.
+    """
+    player = card.get("player_name_espn") or card["player_name"]
+    book_probability = scoring.implied_probability(card["price"])
+    model_probability = card.get("probability") or 0.0
+    stake = float(config["stake"])
+
+    with st.container(border=True):
+        st.markdown(
+            f"#### {player} — {parlay_mod.describe_prop(card)} at "
+            f"{scoring.format_american(card['price'])}"
+        )
+        st.caption(f"{row['team_name']}'s slot · {card.get('nfl_team') or '?'}")
+
+        left, right = st.columns(2)
+        left.metric(
+            "FanDuel's price implies", f"{book_probability:.1%}",
+            help="What the odds say the chance is, bookmaker's margin included. "
+                 "The book's own estimate is a little lower than this.",
+        )
+        right.metric(
+            "Your projection implies", f"{model_probability:.1%}",
+            delta=f"{model_probability - book_probability:+.1%}",
+            help=f"From the PFF projection of {card.get('projection', 0):.2f} "
+                 f"({card.get('projection_field')}).",
+        )
+        # Dollar signs must be escaped: Streamlit's markdown reads a bare $ as
+        # the start of a LaTeX expression and swallows the rest of the sentence.
+        expected_return = stake * model_probability * scoring.american_to_decimal(card["price"])
+        st.markdown(
+            f"You'd be betting that FanDuel has this **too cheap**. If the "
+            f"projection is right, a **\\${stake:,.0f}** bet returns "
+            f"**\\${expected_return:,.2f}** on average — an edge of "
+            f"**{card['score']:+.1%}**."
+        )
+
+        st.markdown("**Before you use it, rule these out:**")
+
+        method = card.get("match_method")
+        if method in ("exact", "alias"):
+            st.markdown(
+                f"- ✅ **Right player.** The name matched exactly across ESPN, the "
+                f"PFF file and FanDuel (*{card.get('projection_source')}* / "
+                f"*{card.get('player_name')}*)."
+            )
+        else:
+            st.markdown(
+                f"- ⚠️ **Check the player.** Matched by {method} at "
+                f"{card.get('match_score', 0):.0f}/100, not exactly: PFF row "
+                f"*{card.get('projection_source')}* ↔ odds feed "
+                f"*{card.get('player_name')}*. A wrong match here would explain "
+                f"the whole edge."
+            )
+
+        age = snapshot_age(card.get("last_update")) if card.get("last_update") else None
+        if age and age != "never":
+            st.markdown(
+                f"- {'⚠️' if 'day' in age else '✅'} **Odds age.** FanDuel last moved "
+                f"this price **{age}**. A stale price is a fake edge."
+            )
+        else:
+            st.markdown("- ⚠️ **Odds age unknown** — refetch to be sure the price is current.")
+
+        st.markdown(
+            "- ⚠️ **News the projection can't see.** A long price on a player your "
+            "projection likes usually means the book knows something about his "
+            "role, health or snap count that last week's file doesn't. This is "
+            "the most common cause — check his status before trusting it."
+        )
+        if card.get("market") == "player_anytime_td":
+            st.markdown(
+                "- ℹ️ **Touchdowns cluster.** Players who score often score twice, "
+                "so this model slightly overstates the chance of scoring *at "
+                "least* once. The real edge is a bit smaller than shown."
+            )
+
+        if st.button(f"Use this leg for {row['team_name']}",
+                     key=f"approve-{card['prop_id']}"):
+            st.session_state.approved_reviews.add(card["prop_id"])
+            st.rerun()
+
 
 
 ready = bool(
@@ -550,31 +650,15 @@ with tab_parlay:
 with tab_review:
     review_rows = [(row, card) for row in picks for card in row.get("review_cards", [])]
     if review_rows:
-        st.subheader(f"🚩 Sanity review ({len(review_rows)})")
+        st.subheader(f"🚩 Too good to trust ({len(review_rows)})")
         st.caption(
-            "These cleared the sanity ceiling, which usually means stale odds, "
-            "un-priced injury news, or a bad name match. Selection proceeds as "
-            "if they don't exist until you approve one."
+            f"These beat the {float(config['sanity_ceiling']):.0%} sanity ceiling you set. "
+            "An edge that big against a real sportsbook is usually a mistake "
+            "somewhere rather than free money, so the bot leaves them out and "
+            "asks you. Nothing here is used in the parlay until you approve it."
         )
         for row, card in review_rows:
-            with st.container(border=True):
-                st.markdown(
-                    f"**{row['team_name']}** — {card.get('player_name_espn') or card['player_name']} "
-                    f"· {parlay_mod.describe_prop(card)} · "
-                    f"{scoring.format_american(card['price'])} · **EV {card['score']:+.1%}**"
-                )
-                detail = st.columns(4)
-                detail[0].caption(f"Projection ({card.get('projection_field')}): "
-                                  f"{card.get('projection', 0):.2f}")
-                detail[1].caption(f"P(win): {card.get('probability', 0):.1%}")
-                detail[2].caption(f"Odds updated: {card.get('last_update') or 'unknown'}")
-                detail[3].caption(f"Matched via {card.get('match_method')} "
-                                  f"({card.get('match_score', 0):.0f})")
-                st.caption(f"CSV row matched: {card.get('projection_source')} · "
-                           f"odds feed name: {card.get('player_name')}")
-                if st.button("Approve and use this leg", key=f"approve-{card['prop_id']}"):
-                    st.session_state.approved_reviews.add(card["prop_id"])
-                    st.rerun()
+            render_review_card(row, card)
     else:
         st.caption("No props tripped the sanity ceiling.")
 
