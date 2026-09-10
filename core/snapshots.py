@@ -80,15 +80,10 @@ def save_odds(store, *, events, raw_by_event, markets, fetched_at,
     A message is returned whenever the user should know something, whether or
     not the save succeeded.
     """
-    document = {
-        "saved_at": _now(),
-        "fetched_at": fetched_at,
-        "markets": list(markets or []),
-        "window": window,
-        "events": events,
-        "raw_by_event": prune_odds(raw_by_event),
-        "pruned": True,
-    }
+    document = build_odds_document(
+        events=events, raw_by_event=raw_by_event, markets=markets,
+        fetched_at=fetched_at, window=window,
+    )
     oversize = _too_big(document)
     if oversize:
         return False, (
@@ -104,6 +99,33 @@ def save_odds(store, *, events, raw_by_event, markets, fetched_at,
     except Exception as exc:
         return False, f"Could not save the odds snapshot: {exc}"
     return (saved, None) if saved else (False, "Could not save the odds snapshot.")
+
+
+def build_odds_document(*, events, raw_by_event, markets, fetched_at,
+                        window=None) -> dict:
+    """The snapshot document, without writing it anywhere.
+
+    Shared by the store path and the manual download, so a file the user backs
+    up by hand is byte-for-byte what the app would have saved itself.
+    """
+    return {
+        "saved_at": _now(),
+        "fetched_at": fetched_at,
+        "markets": list(markets or []),
+        "window": window,
+        "events": events,
+        "raw_by_event": prune_odds(raw_by_event),
+        "pruned": True,
+    }
+
+
+def read_odds_document(document) -> dict | None:
+    """Validate a snapshot that came from a file rather than the store."""
+    if not isinstance(document, dict):
+        return None
+    if not document.get("raw_by_event") or not isinstance(document["raw_by_event"], dict):
+        return None
+    return document
 
 
 def load_odds(store) -> dict | None:

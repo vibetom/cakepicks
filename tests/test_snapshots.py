@@ -188,3 +188,43 @@ class TestAge:
     def test_unparseable(self):
         assert snapshots.age_in_hours("not a date") is None
         assert snapshots.age_in_hours(None) is None
+
+
+class TestManualBackup:
+    """The escape hatch for users who have not set up durable storage."""
+
+    def test_downloaded_document_matches_what_the_store_would_write(
+        self, store, events, raw_by_event
+    ):
+        manual = snapshots.build_odds_document(
+            events=events, raw_by_event=raw_by_event,
+            markets=["player_rush_yds"], fetched_at="2026-09-10T18:00:00+00:00")
+        snapshots.save_odds(store, events=events, raw_by_event=raw_by_event,
+                            markets=["player_rush_yds"],
+                            fetched_at="2026-09-10T18:00:00+00:00")
+        stored = snapshots.load_odds(store)
+        # saved_at differs by construction time; everything else must match.
+        for key in ("fetched_at", "markets", "raw_by_event", "pruned"):
+            assert manual[key] == stored[key]
+
+    def test_uploaded_document_is_validated(self):
+        assert snapshots.read_odds_document({"raw_by_event": {"e": {}}})
+        assert snapshots.read_odds_document({"raw_by_event": {}}) is None
+        assert snapshots.read_odds_document({"nope": 1}) is None
+        assert snapshots.read_odds_document([1, 2]) is None
+        assert snapshots.read_odds_document(None) is None
+        assert snapshots.read_odds_document({"raw_by_event": "not a dict"}) is None
+
+    def test_a_downloaded_snapshot_round_trips_through_upload(
+        self, events, raw_by_event
+    ):
+        import json as _json
+
+        document = snapshots.build_odds_document(
+            events=events, raw_by_event=raw_by_event, markets=[], fetched_at=None)
+        # Exactly what the download button produces and the uploader receives.
+        reloaded = snapshots.read_odds_document(_json.loads(_json.dumps(document)))
+        assert reloaded is not None
+        assert set(reloaded["raw_by_event"]) == set(raw_by_event)
+        assert parse_event_props(reloaded["raw_by_event"]["evt-cin-ne"]) == \
+            parse_event_props(raw_by_event["evt-cin-ne"])

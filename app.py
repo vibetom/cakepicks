@@ -322,7 +322,7 @@ def render_sidebar() -> dict:
             st.rerun()
 
     st.sidebar.divider()
-    with st.sidebar.expander("Storage", expanded=False):
+    with st.sidebar.expander("Storage", expanded=not store.persistent):
         if store_warning:
             st.warning(store_warning)
         healthy, message = store_status()
@@ -398,6 +398,12 @@ def fetch_odds(window_start: dt.datetime, window_end: dt.datetime) -> None:
     )
     st.session_state.odds_saved_at = fetched_at if saved else None
     st.session_state.saved_odds_available = bool(saved)
+    if saved and not store.persistent:
+        note = (
+            "That fetch spent credits, and the snapshot was written to local disk "
+            "only — your next redeploy will erase it. Set up GitHub storage "
+            "(README Step 6), or download the snapshot before redeploying."
+        )
     st.session_state.snapshot_note = note
     # A fresh fetch is live data, not a restore.
     st.session_state.restored_from_storage = []
@@ -474,6 +480,56 @@ with actions:
              f"({estimate} markets × 1 region).",
     )
     reload_clicked = st.button("👥 Reload rosters only (free)", width="stretch")
+    with st.expander("Back up / restore odds snapshot", expanded=False):
+        st.caption(
+            "A manual copy of the fetched odds. Download it before a redeploy "
+            "and upload it afterwards to avoid paying for the same week twice. "
+            "Setting up GitHub storage (README Step 6) does this automatically."
+        )
+        if st.session_state.raw_by_event:
+            document = snapshots.build_odds_document(
+                events=st.session_state.events,
+                raw_by_event=st.session_state.raw_by_event,
+                markets=config["markets"],
+                fetched_at=st.session_state.odds_fetched_at,
+            )
+            st.download_button(
+                "⬇️ Download odds snapshot", json.dumps(document),
+                file_name="odds-snapshot.json", mime="application/json",
+                width="stretch",
+            )
+        else:
+            st.caption("Nothing loaded to back up yet.")
+
+        incoming = st.file_uploader("Upload a snapshot", type=["json"],
+                                    key="restore-odds-file")
+        if incoming is not None and not st.session_state.get("_restored_upload"):
+            try:
+                document = snapshots.read_odds_document(
+                    json.loads(incoming.getvalue()))
+            except json.JSONDecodeError:
+                document = None
+            if document is None:
+                st.error("That file isn't an odds snapshot.")
+            else:
+                st.session_state.events = document.get("events") or []
+                st.session_state.raw_by_event = document["raw_by_event"]
+                st.session_state.odds_fetched_at = (
+                    document.get("fetched_at") or document.get("saved_at"))
+                st.session_state.restored_from_storage = ["odds"]
+                st.session_state._restored_upload = True
+                # Persist it so the store has it too, where the store can keep it.
+                snapshots.save_odds(
+                    store, events=st.session_state.events,
+                    raw_by_event=st.session_state.raw_by_event,
+                    markets=document.get("markets") or config["markets"],
+                    fetched_at=st.session_state.odds_fetched_at,
+                )
+                st.success(
+                    f"Restored {len(document['raw_by_event'])} games — no credits spent."
+                )
+                st.rerun()
+
     if st.session_state.get("saved_odds_available"):
         if st.button("↩️ Reload saved odds (free)", width="stretch",
                      help="Go back to the last saved snapshot without spending "
@@ -666,10 +722,16 @@ status[2].caption(projection_note)
 if st.session_state.get("snapshot_note"):
     st.warning(st.session_state.snapshot_note)
 
-if restored_kinds and not store.persistent:
-    st.caption(
-        "These came from local disk. On the hosted app that is wiped on restart — "
-        "set up GitHub storage (README Step 6) to make restoring survive a reboot."
+if not store.persistent:
+    st.error(
+        "**Nothing here will survive your next redeploy.** Storage is set to local "
+        "disk, and Streamlit wipes that every time the app restarts — so each "
+        "redeploy costs you another full fetch (~100 API credits).\n\n"
+        "**To fix it permanently:** add `GITHUB_TOKEN` and `GITHUB_REPO` to "
+        "**⋮ → Settings → Secrets** (README Step 6). The app then keeps its odds "
+        "snapshot on the `parlay-data` branch and reloads it on every start.\n\n"
+        "**Until then**, use *Back up / restore* below to download the snapshot "
+        "before you redeploy and re-upload it afterwards."
     )
 
 # Odds go stale as books move lines, and the projections file is weekly.

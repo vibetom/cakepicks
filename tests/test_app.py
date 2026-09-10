@@ -728,3 +728,62 @@ class TestParlayLinkInTheUI:
         assert_no_exceptions(app)
         body = " ".join(m.value for m in app.markdown)
         assert "Legs carrying both" in body
+
+
+class TestEphemeralStorageWarning:
+    """A redeploy wiping the snapshot must never be a silent surprise."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_caches(self):
+        import streamlit as st
+        st.cache_resource.clear()
+        st.cache_data.clear()
+        yield
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+    @pytest.fixture
+    def loaded(self, monkeypatch, events, raw_by_event, league, projections, config):
+        monkeypatch.setenv("ODDS_API_KEY", "test-key")
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("GITHUB_REPO", raising=False)
+        return dict(
+            config=config, events=events, raw_by_event=raw_by_event,
+            teams_raw=league, projections=projections,
+            projection_filename="week-2.csv", projection_warnings=[],
+            odds_fetched_at="2026-09-10T18:00:00+00:00",
+            roster_fetched_at="2026-09-10T18:00:00+00:00",
+            overrides={}, approved_reviews=set(), quota={},
+        )
+
+    def test_local_storage_warns_prominently(self, loaded):
+        """The old caption only fired when something HAD been restored, so the
+        redeploy that wiped everything showed nothing at all."""
+        app = run_app(**loaded)
+        assert_no_exceptions(app)
+        errors = " ".join(e.value for e in app.error)
+        assert "survive your next redeploy" in errors
+        assert "GITHUB_TOKEN" in errors
+
+    def test_the_warning_names_the_manual_workaround(self, loaded):
+        app = run_app(**loaded)
+        errors = " ".join(e.value for e in app.error)
+        assert "Back up / restore" in errors
+
+    def test_backup_download_is_offered(self, loaded):
+        app = run_app(**loaded)
+        assert_no_exceptions(app)
+        assert any("Download odds snapshot" in b.label for b in app.download_button)
+
+    def test_no_warning_when_storage_is_durable(self, loaded, monkeypatch):
+        from tests.test_store import FakeGitHub
+
+        monkeypatch.setenv("GITHUB_TOKEN", "tok_abc")
+        monkeypatch.setenv("GITHUB_REPO", "owner/repo")
+        fake = FakeGitHub()
+        monkeypatch.setattr("requests.Session.request",
+                            lambda self, *a, **k: fake.request(*a, **k))
+        app = run_app(**loaded)
+        assert_no_exceptions(app)
+        errors = " ".join(e.value for e in app.error)
+        assert "survive your next redeploy" not in errors

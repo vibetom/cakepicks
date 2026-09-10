@@ -126,8 +126,17 @@ credits. **💾 Save this run** in the History tab commits that week's picks too
 and your Win/Loss grades and season totals survive restarts. You can browse the files on GitHub, and even fix a grade by editing
 the JSON there directly.
 
-If you skip this step nothing breaks — the app just falls back to local disk and
-tells you so, and the Download buttons still let you keep records by hand.
+**How to tell whether it worked:** the app shows a red banner reading *"Nothing
+here will survive your next redeploy"* whenever storage is local-only. Once the
+secrets are right that banner disappears and the sidebar's **Storage** section
+turns green. You can also check GitHub directly: a `parlay-data` branch appears
+in the branch list the first time anything is saved. **No branch means nothing
+has been saved yet**, and every redeploy is costing you a fresh fetch.
+
+If you skip this step nothing breaks, but every redeploy costs another ~100 API
+credits. As a stopgap, **Back up / restore odds snapshot** (next to the Fetch
+button) downloads the snapshot to a file and reloads it afterwards — same
+result, done by hand.
 
 ### Things to know about free hosting
 
