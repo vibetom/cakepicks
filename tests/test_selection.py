@@ -318,3 +318,42 @@ class TestMarketFilter:
         legacy = {k: v for k, v in config.items() if k != "markets"}
         result = run(legacy, sanity_ceiling=5.0)
         assert any(row["pick"] for row in result["picks"])
+
+
+class TestFuzzyMatchReporting:
+    """Accepted-but-inexact matches must be visible, not silent."""
+
+    def test_accepted_fuzzy_matches_are_reported(self, config, events, raw_by_event,
+                                                 league, projections, aliases):
+        # Rename the roster entry so the odds feed name only matches loosely,
+        # while keeping the first name compatible so it is accepted.
+        teams_in = [{**t, "players": [
+            {**p, "name": "Ja'Marr Chase Jr." if p["name"] == "Ja'Marr Chase" else p["name"]}
+            for p in t["players"]]} for t in league]
+        teams = filter_players(teams_in, playing_team_codes(events))
+        scored = score_props(events=events, raw_by_event=raw_by_event, teams=teams,
+                             projections=projections, config=config, aliases=aliases)
+        assert "fuzzy_matches" in scored
+
+    def test_no_fuzzy_matches_on_clean_data(self, config, events, raw_by_event,
+                                            league, projections, aliases):
+        teams = filter_players(league, playing_team_codes(events))
+        scored = score_props(events=events, raw_by_event=raw_by_event, teams=teams,
+                             projections=projections, config=config, aliases=aliases)
+        assert scored["fuzzy_matches"] == []
+
+    def test_a_different_player_never_attaches(self, config, events, raw_by_event,
+                                               league, projections, aliases):
+        """The live bug: another player's props scored against your player."""
+        teams = filter_players(league, playing_team_codes(events))
+        # Add a prop for a same-surname stranger in the same game.
+        payload = raw_by_event["evt-cin-ne"]
+        payload["bookmakers"][0]["markets"].append({
+            "key": "player_anytime_td", "sid": "mkt-x",
+            "outcomes": [{"name": "Yes", "description": "Brian Chase", "price": 900}],
+        })
+        scored = score_props(events=events, raw_by_event=raw_by_event, teams=teams,
+                             projections=projections, config=config, aliases=aliases)
+        attached = [p for props in scored["by_team"].values() for p in props
+                    if p["player_name"] == "Brian Chase"]
+        assert attached == []

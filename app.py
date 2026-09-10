@@ -301,7 +301,10 @@ def render_sidebar() -> dict:
         new["fuzzy_threshold"] = st.slider(
             "Fuzzy match threshold", 70, 100, int(config["fuzzy_threshold"]),
             help="rapidfuzz cutoff. Below this a name is reported as unmatched "
-                 "rather than guessed.")
+                 "rather than guessed. Names whose first names disagree "
+                 "(Brian/Bijan, Malik/Mike) are always rejected regardless of "
+                 "score, so a lower cutoff here is safer than it looks — it "
+                 "mainly admits abbreviations like Chig/Chigoziem.")
 
     save_col, reset_col = st.sidebar.columns(2)
     with save_col:
@@ -996,6 +999,25 @@ with tab_diag:
                     if not aliases.add(item["name"], item["closest"]):
                         st.toast("Alias applied for this session but not saved.")
                     st.rerun()
+
+    fuzzy = scored.get("fuzzy_matches") or []
+    if fuzzy:
+        st.subheader(f"Approximate name matches ({len(fuzzy)})")
+        st.caption(
+            "These were accepted without being identical. A wrong one silently "
+            "scores another player's odds, so it is worth a glance."
+        )
+        st.dataframe(
+            pd.DataFrame([
+                {"From": item["name"],
+                 "Source": "odds feed" if item["source"] == "odds" else "PFF CSV",
+                 "Matched to": item["matched"],
+                 "Score": round(item["score"]),
+                 "NFL": ", ".join(t for t in (item.get("teams") or []) if t)}
+                for item in fuzzy
+            ]),
+            width="stretch", hide_index=True,
+        )
 
     st.subheader("Roster exclusions")
     excluded = [

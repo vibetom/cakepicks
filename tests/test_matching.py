@@ -2,7 +2,9 @@
 
 import pytest
 
-from core.matching import AliasStore, NameMatcher, normalize_name
+from core.matching import (
+    AliasStore, NameMatcher, first_names_compatible, normalize_name,
+)
 from core.store import LocalStore
 from core.teams import ESPN_PRO_TEAM_ID, CANONICAL, normalize_team
 
@@ -120,3 +122,68 @@ class TestAliases:
         store = AliasStore(None)
         assert store.add("K. Boutte", "Kayshon Boutte") is False
         assert store.get("K. Boutte") == "Kayshon Boutte"   # still applies in-session
+
+
+class TestFirstNameGuard:
+    """Two different people with the same surname must never fuzzy-match.
+
+    Similarity scoring is dominated by the surname, so real NFL pairs clear a
+    sensible cutoff while being different players. Both cases below were found
+    in live data: Brian Robinson Jr. scored 93 against Bijan Robinson, and
+    Malik Washington scored 90 against Mike Washington Jr.
+    """
+
+    @pytest.mark.parametrize("left,right", [
+        ("brian robinson", "bijan robinson"),
+        ("malik washington", "mike washington"),
+        ("gabe davis", "gabriel davis"),
+        ("kenny gainwell", "kenneth gainwell"),
+    ])
+    def test_incompatible_first_names_are_rejected(self, left, right):
+        assert not first_names_compatible(left, right)
+
+    @pytest.mark.parametrize("left,right", [
+        ("k boutte", "kayshon boutte"),
+        ("dj moore", "dj moore"),
+        ("jamar chase", "jamarr chase"),
+        ("cam ward", "cameron ward"),
+        ("josh allen", "joshua allen"),
+        ("chig okonkwo", "chigoziem okonkwo"),
+    ])
+    def test_abbreviations_still_match(self, left, right):
+        assert first_names_compatible(left, right)
+
+    def test_empty_names(self):
+        assert not first_names_compatible("", "bijan robinson")
+        assert not first_names_compatible("brian robinson", "")
+
+    def test_the_bijan_case_end_to_end(self, tmp_path):
+        """Brian Robinson Jr.'s odds must not attach to Bijan Robinson."""
+        entries = {"bijan": ("Bijan Robinson", "ATL")}
+        matcher = NameMatcher(entries, AliasStore(LocalStore(tmp_path)), threshold=90)
+        result = matcher.match("Brian Robinson Jr.", ["ATL"])
+        assert not result.matched
+        # It still shows up in diagnostics so an alias can override it.
+        assert result.candidate == "bijan"
+        assert result.candidate_score >= 90
+
+    def test_the_washington_case_end_to_end(self, tmp_path):
+        entries = {"mike": ("Mike Washington Jr.", "LV")}
+        matcher = NameMatcher(entries, AliasStore(LocalStore(tmp_path)), threshold=90)
+        assert not matcher.match("Malik Washington", ["LV", "MIA"]).matched
+
+    def test_an_alias_can_still_force_a_rejected_pair(self, tmp_path):
+        """The guard refuses to guess; it must not override an explicit alias."""
+        store = AliasStore(LocalStore(tmp_path))
+        entries = {"kenneth": ("Kenneth Gainwell", "PIT")}
+        store.add("Kenny Gainwell", "Kenneth Gainwell")
+        matcher = NameMatcher(entries, store, threshold=90)
+        result = matcher.match("Kenny Gainwell", ["PIT"])
+        assert result.key == "kenneth"
+        assert result.method == "alias"
+
+    def test_a_lower_threshold_stays_safe(self, tmp_path):
+        """The guard, not the cutoff, is what blocks a different player."""
+        entries = {"bijan": ("Bijan Robinson", "ATL")}
+        matcher = NameMatcher(entries, AliasStore(LocalStore(tmp_path)), threshold=70)
+        assert not matcher.match("Brian Robinson Jr.", ["ATL"]).matched

@@ -163,6 +163,7 @@ def score_props(*, events, raw_by_event, teams, projections, config,
     scored_by_team: dict[object, list] = {team["team_id"]: [] for team in teams}
     unmatched_props: list[dict] = []
     missing_projections: list[dict] = []
+    fuzzy_matches: list[dict] = []
     matched_player_keys: set = set()
 
     events_by_id = {e["id"]: e for e in events}
@@ -189,6 +190,14 @@ def score_props(*, events, raw_by_event, teams, projections, config,
 
             player = players[roster_hit.key]
             matched_player_keys.add(roster_hit.key)
+            if roster_hit.method == "fuzzy":
+                # Accepted, but not identical -- worth a human glance, since a
+                # wrong match imports another player's odds silently.
+                fuzzy_matches.append({
+                    "source": "odds", "name": prop["player_name"],
+                    "matched": player["name"], "score": roster_hit.score,
+                    "teams": [player.get("nfl_team")],
+                })
 
             projection_hit = projection_matcher.match(
                 player["name"], [player["nfl_team"]] if player.get("nfl_team") else None
@@ -206,6 +215,13 @@ def score_props(*, events, raw_by_event, teams, projections, config,
                 })
                 continue
 
+            if projection_hit.method == "fuzzy":
+                fuzzy_matches.append({
+                    "source": "csv", "name": player["name"],
+                    "matched": projections.iloc[projection_hit.key]["playerName"],
+                    "score": projection_hit.score,
+                    "teams": [player.get("nfl_team")],
+                })
             projection = row_to_projection(projections, projection_hit.key)
             scored = score_prop(prop, projection, config)
             scored.update({
@@ -226,6 +242,7 @@ def score_props(*, events, raw_by_event, teams, projections, config,
         "by_team": scored_by_team,
         "unmatched_props": _dedupe(unmatched_props),
         "missing_projections": _dedupe(missing_projections),
+        "fuzzy_matches": _dedupe_fuzzy(fuzzy_matches),
     }
 
 
@@ -239,6 +256,18 @@ def _dedupe(rows: list[dict]) -> list[dict]:
         seen.add(key)
         out.append(row)
     return sorted(out, key=lambda r: -r.get("score", 0))
+
+
+def _dedupe_fuzzy(rows: list[dict]) -> list[dict]:
+    seen = set()
+    out = []
+    for row in rows:
+        key = (row["source"], row["name"], row["matched"])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return sorted(out, key=lambda r: r["score"])
 
 
 def _sort_key(prop: dict):

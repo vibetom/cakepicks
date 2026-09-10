@@ -88,6 +88,36 @@ class AliasStore:
         return dict(self._aliases)
 
 
+def _token_compatible(a: str, b: str) -> bool:
+    """True when two name tokens can be the same person's.
+
+    Real variation between these sources is abbreviation and truncation --
+    "K." for "Kayshon", "Cam" for "Cameron", "Jamar" for "Ja'Marr" -- all of
+    which leave one token a prefix of the other. Two different spellings of
+    different names ("Brian" vs "Bijan", "Malik" vs "Mike") are not.
+    """
+    if not a or not b:
+        return False
+    return a == b or a.startswith(b) or b.startswith(a)
+
+
+def first_names_compatible(left: str, right: str) -> bool:
+    """Guard against fuzzy-matching two different people with the same surname.
+
+    Similarity scoring is dominated by the surname, so "Brian Robinson Jr." and
+    "Bijan Robinson" score 93 and "Malik Washington" and "Mike Washington Jr."
+    score 90 -- both above a sensible cutoff, and both wrong. Requiring the
+    first names to be compatible rejects those while leaving abbreviations
+    intact. A rejected pair is reported as unmatched, where an alias can
+    confirm it if it really is the same player.
+    """
+    left_tokens = left.split()
+    right_tokens = right.split()
+    if not left_tokens or not right_tokens:
+        return False
+    return _token_compatible(left_tokens[0], right_tokens[0])
+
+
 class MatchResult:
     """Outcome of one name lookup."""
 
@@ -175,7 +205,8 @@ class NameMatcher:
             if best:
                 cand_norm, score, _ = best
                 cand_keys = pool[cand_norm]
-                if score >= self.threshold and len(cand_keys) == 1:
+                if (score >= self.threshold and len(cand_keys) == 1
+                        and first_names_compatible(norm, cand_norm)):
                     return MatchResult(cand_keys[0], "fuzzy", float(score))
                 return MatchResult(None, "unmatched", 0.0,
                                    candidate=cand_keys[0], candidate_score=float(score))

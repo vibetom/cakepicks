@@ -243,7 +243,7 @@ floor to **-120** and it will look much healthier.
 | Stake | $10 | Display only — the app never places a bet |
 | Season year | 2026 | ESPN season |
 | ESPN league ID | 563635 | Change this in the sidebar to point at a different league — no redeploy needed |
-| Fuzzy match threshold | 90 | Below this, a name is reported unmatched rather than guessed |
+| Fuzzy match threshold | 90 | Below this, a name is reported unmatched rather than guessed. Names with disagreeing first names are rejected at any score, so a lower cutoff is safer than it looks |
 | Markets | all 7 | Unchecking one drops it from the picks immediately and from the next fetch |
 
 Players who are OUT, on IR, suspended, doubtful, or whose NFL team has no game
@@ -276,7 +276,8 @@ persist properly, since the disk isn't ephemeral.
 | "Could not load ESPN league" | The league must be public: ESPN → League Settings → Basic Settings → Visibility → Public. Also check the season year in the sidebar. |
 | Quota exhausted (429) | You've used 500 credits this month. The app falls back to the last cached odds; selection still runs. |
 | Lots of empty slots | See "Why you may see a lot of NONE" above — usually the odds floor. |
-| A player's props are ignored | Check the **Diagnostics** tab for unmatched names and click "Alias →" to fix it. |
+| A player's props are ignored | Check the **Diagnostics** tab for unmatched names and click "Alias →" to fix it. Nicknames like Kenny/Kenneth need an alias; the matcher will not guess them. |
+| A leg looks far too good to be true | Check **Approximate name matches** in Diagnostics. Two different players with the same surname (Brian/Bijan Robinson, Malik/Mike Washington) are the classic cause — one player's longshot price scored against another's projections. |
 | Repo doesn't show up in Streamlit | Streamlit's GitHub authorization doesn't cover it. Re-authorize and grant access to the repo. |
 | Storage says "token lacks Contents: Read and write" | The fine-grained token was created without write permission. Regenerate it with **Contents: Read and write** (Step 6.4). |
 | Storage says "GitHub rejected the token (401)" | The token expired or was mistyped. Generate a new one and update `GITHUB_TOKEN` in Secrets. |
