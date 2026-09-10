@@ -334,6 +334,7 @@ def select_picks(scored: dict, teams: list[dict], config: dict,
         pick = None
         tier = None
         manual = False
+        best_gap = best_ev = None
 
         override_id = overrides.get(team_id)
         if override_id:
@@ -364,6 +365,9 @@ def select_picks(scored: dict, teams: list[dict], config: dict,
         if pick is not None:
             used_players.add(pick["player_key"])
 
+        why_short, why_detail = explain_pick(
+            pick, tier, manual, best_gap, best_ev, config)
+
         alternatives = sorted(
             (p for p in eligible if pick is None or p["prop_id"] != pick["prop_id"]),
             key=_sort_key, reverse=True,
@@ -377,11 +381,64 @@ def select_picks(scored: dict, teams: list[dict], config: dict,
             "tier": tier,
             "manual": manual,
             "alternatives": alternatives,
+            "why": why_short,
+            "why_detail": why_detail,
             "review_cards": review_cards,
             "none_reason": None if pick else _none_reason(team, candidates, config),
             "candidate_count": len(candidates),
         })
     return results
+
+
+def _label(prop: dict) -> str:
+    """Short description of a prop, for use inside an explanation."""
+    market = scoring.MARKET_LABELS.get(prop.get("market"), prop.get("market", ""))
+    line = prop.get("line")
+    name = prop.get("player_name_espn") or prop.get("player_name") or "?"
+    if line is None:
+        return f"{name} {market}"
+    return f"{name} {market} o{line:g}"
+
+
+def explain_pick(pick, tier, manual, best_gap, best_ev, config) -> tuple[str, str]:
+    """(short label, full sentence) saying why this leg won its slot.
+
+    Without this the table shows a pick changing when a slider moves and gives
+    no way to tell whether that is the rule working or a bug.
+    """
+    if pick is None:
+        return "—", ""
+    if manual:
+        return "Manual", "You chose this leg by hand; thresholds were not applied."
+
+    gap_threshold = float(config["gap_threshold"])
+    ev_threshold = float(config["ev_threshold"])
+    ev_won = best_ev is not None and pick is best_ev
+
+    if tier == 2:
+        return "Best available", (
+            f"Nothing on this roster cleared a threshold, so the best remaining "
+            f"prop was taken anyway: {_label(pick)} at {pick['score']:+.1%}."
+        )
+    if ev_won and best_gap is not None and best_gap["score"] >= gap_threshold:
+        return "EV override", (
+            f"{_label(best_gap)} qualified on gap ({best_gap['score']:+.1%}), but "
+            f"this prop's EV of {pick['score']:+.1%} cleared the "
+            f"{ev_threshold:.0%} override threshold and took the slot."
+        )
+    if ev_won:
+        return "EV", (
+            f"No yardage prop cleared the {gap_threshold:.0%} gap threshold, and "
+            f"this prop's EV of {pick['score']:+.1%} cleared the "
+            f"{ev_threshold:.0%} EV threshold."
+        )
+    return "Gap", (
+        f"Best yardage prop on this roster, and its gap of {pick['score']:+.1%} "
+        f"cleared the {gap_threshold:.0%} threshold."
+        + (f" The best EV prop ({_label(best_ev)}, {best_ev['score']:+.1%}) did not "
+           f"reach the {ev_threshold:.0%} override threshold."
+           if best_ev is not None else "")
+    )
 
 
 def prop_id(prop: dict) -> str:

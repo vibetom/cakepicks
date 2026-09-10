@@ -207,6 +207,13 @@ Then, per fantasy team:
 
 Ties break on the better price, then alphabetically. No player can fill two slots.
 
+The results table's **Why** column says which rule produced each leg — `Gap`,
+`EV`, `EV override`, `Best available` or `Manual`. Expanding a team under
+**Review & overrides** spells it out in full, naming the prop an EV override
+displaced. That is usually the answer when a pick changes unexpectedly after
+moving a slider: the EV override is what most often swaps a strong yardage prop
+for a longer-priced one.
+
 ### Why the volume floors exist — don't zero them out
 
 PFF projections are per-game **means** of right-skewed distributions, while

@@ -872,6 +872,7 @@ with tab_parlay:
             "FanDuel": scoring.format_american(prop["price"]) if prop else "—",
             "Score": parlay_mod.score_text(prop) if prop else "—",
             "Tier": str(row.get("tier") or "—"),
+            "Why": row.get("why") or "—",
             "Flags / reason": ", ".join(flags) if prop else (row.get("none_reason") or ""),
             "Betslip": (leg_link(prop) or "") if prop else "",
         })
@@ -997,6 +998,8 @@ with tab_review:
         with st.expander(header):
             if row.get("none_reason"):
                 st.warning(row["none_reason"])
+            elif row.get("why_detail"):
+                st.info(row["why_detail"])
             options = [("__auto__", "Automatic pick")]
             for alt in row["alternatives"]:
                 options.append((

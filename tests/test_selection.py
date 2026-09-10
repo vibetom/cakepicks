@@ -409,3 +409,53 @@ class TestOddsCeiling:
         result = run(config, odds_ceiling=-300, odds_floor=-300)
         reasons = [r["none_reason"] for r in result["picks"] if r["none_reason"]]
         assert any("ceiling" in r for r in reasons)
+
+
+class TestPickRationale:
+    """Every pick must be able to say why it won its slot."""
+
+    def test_a_gap_pick_says_so(self, run, config):
+        result = run(config, ev_enabled=False)
+        row = pick_for(result, "Chase Lounge")
+        assert row["why"] == "Gap"
+        assert "cleared the 10% threshold" in row["why_detail"]
+
+    def test_an_ev_override_names_what_it_displaced(self, run, config):
+        """The confusing case: a qualifying yardage prop loses its slot."""
+        result = run(config, ev_threshold=0.01, sanity_ceiling=5.0)
+        row = pick_for(result, "Chase Lounge")
+        assert row["why"] == "EV override"
+        assert "qualified on gap" in row["why_detail"]
+        assert "took the slot" in row["why_detail"]
+
+    def test_tier_two_says_nothing_qualified(self, run, config):
+        result = run(config, gap_threshold=0.95, ev_threshold=5.0, ev_enabled=False)
+        row = pick_for(result, "Chase Lounge")
+        assert row["why"] == "Best available"
+        assert "Nothing on this roster cleared a threshold" in row["why_detail"]
+
+    def test_an_empty_slot_has_no_rationale(self, run, config):
+        row = pick_for(run(config), "Bye Week Blues")
+        assert row["why"] == "—"
+        assert row["why_detail"] == ""
+
+    def test_a_manual_override_says_so(self, config, events, raw_by_event,
+                                       league, projections, aliases):
+        teams = filter_players(league, playing_team_codes(events))
+        scored = score_props(events=events, raw_by_event=raw_by_event, teams=teams,
+                             projections=projections, config=config, aliases=aliases)
+        picks = select_picks(scored, teams, config)
+        row = next(r for r in picks if r["team_name"] == "Chase Lounge")
+        alternative = row["alternatives"][0]
+        overridden = select_picks(scored, teams, config,
+                                  overrides={1: alternative["prop_id"]})
+        row_after = next(r for r in overridden if r["team_name"] == "Chase Lounge")
+        assert row_after["why"] == "Manual"
+
+    def test_every_filled_pick_gets_a_rationale(self, run, config):
+        for ceiling in (200, 300, None):
+            result = run(config, odds_ceiling=ceiling, sanity_ceiling=5.0)
+            for row in result["picks"]:
+                if row["pick"]:
+                    assert row["why"] and row["why"] != "—"
+                    assert row["why_detail"]
