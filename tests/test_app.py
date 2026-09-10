@@ -176,7 +176,7 @@ class TestFullRender:
         app = run_app(**loaded)
         assert_no_exceptions(app)
         headers = " ".join(s.value for s in app.subheader)
-        assert "Unmatched names" in headers
+        assert "Names the matcher wouldn't guess" in headers
         assert "Roster exclusions" in headers
 
     def test_history_tab_offers_a_download(self, loaded):
@@ -363,7 +363,7 @@ class TestSaveThroughTheUI:
 
         app = run_app(**state)
         assert_no_exceptions(app)
-        alias_buttons = [b for b in app.button if b.label.startswith("Alias →")]
+        alias_buttons = [b for b in app.button if b.label.startswith("✓ Same player")]
         assert alias_buttons, "the unmatched name should offer an alias fix"
 
         alias_buttons[0].click().run()
@@ -743,10 +743,12 @@ class TestEphemeralStorageWarning:
         st.cache_data.clear()
 
     @pytest.fixture
-    def loaded(self, monkeypatch, events, raw_by_event, league, projections, config):
+    def loaded(self, monkeypatch, tmp_path, events, raw_by_event, league,
+               projections, config):
         monkeypatch.setenv("ODDS_API_KEY", "test-key")
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
         monkeypatch.delenv("GITHUB_REPO", raising=False)
+        monkeypatch.chdir(tmp_path)          # never write into the repo
         return dict(
             config=config, events=events, raw_by_event=raw_by_event,
             teams_raw=league, projections=projections,
@@ -787,3 +789,68 @@ class TestEphemeralStorageWarning:
         assert_no_exceptions(app)
         errors = " ".join(e.value for e in app.error)
         assert "survive your next redeploy" not in errors
+
+
+class TestDiagnosticsChoices:
+    """A near-miss must offer both answers, not just 'alias it'."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_caches(self):
+        import streamlit as st
+        st.cache_resource.clear()
+        st.cache_data.clear()
+        yield
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+    @pytest.fixture
+    def near_miss(self, monkeypatch, tmp_path, events, raw_by_event, league,
+                  projections, config):
+        monkeypatch.setenv("ODDS_API_KEY", "test-key")
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("GITHUB_REPO", raising=False)
+        monkeypatch.chdir(tmp_path)          # never write into the repo
+        raw = json.loads(json.dumps(raw_by_event))
+        # A real other player whose surname matches one of ours.
+        raw["evt-cin-ne"]["bookmakers"][0]["markets"].append({
+            "key": "player_rush_yds", "sid": "mkt-x",
+            "outcomes": [{"name": "Over", "description": "K. Boutte",
+                          "price": -110, "point": 12.5}],
+        })
+        return dict(
+            config=config, events=events, raw_by_event=raw,
+            teams_raw=league, projections=projections,
+            projection_filename="week-2.csv", projection_warnings=[],
+            odds_fetched_at="2026-09-10T18:00:00+00:00",
+            roster_fetched_at="2026-09-10T18:00:00+00:00",
+            overrides={}, approved_reviews=set(), quota={},
+        )
+
+    def test_both_answers_are_offered(self, near_miss):
+        app = run_app(**near_miss)
+        assert_no_exceptions(app)
+        labels = [b.label for b in app.button]
+        assert any(l.startswith("✓ Same player") for l in labels)
+        assert any(l.startswith("✗ Different player") for l in labels)
+
+    def test_the_copy_says_no_action_is_usually_needed(self, near_miss):
+        app = run_app(**near_miss)
+        captions = " ".join(c.value for c in app.caption)
+        assert "different people" in captions
+        assert "needs no action" in captions
+
+    def test_marking_different_removes_it_from_the_list(self, near_miss):
+        app = run_app(**near_miss)
+        next(b for b in app.button if b.label.startswith("✗ Different player")).click().run()
+        assert_no_exceptions(app)
+        labels = [b.label for b in app.button]
+        assert not any(l.startswith("✗ Different player") for l in labels)
+        successes = " ".join(s.value for s in app.success)
+        assert "Nothing needs your attention" in successes
+
+    def test_the_two_sources_are_described_correctly(self, near_miss):
+        """An odds name and a missing-projection name mean opposite things."""
+        app = run_app(**near_miss)
+        body = " ".join(m.value for m in app.markdown)
+        assert "priced by FanDuel" in body
+        assert "not matched to anyone on your rosters" in body

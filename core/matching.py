@@ -118,6 +118,66 @@ def first_names_compatible(left: str, right: str) -> bool:
     return _token_compatible(left_tokens[0], right_tokens[0])
 
 
+class RejectionStore:
+    """Name pairs a person has confirmed are two different players.
+
+    The diagnostics panel surfaces near-misses so a genuine spelling variant
+    can be aliased. Most near-misses are not variants at all -- they are other
+    NFL players who simply are not on anyone's roster, and there is nothing to
+    fix. Recording that judgement keeps the panel down to entries that might
+    still need action.
+
+    This affects only what is shown. Matching never consults it: a rejected
+    pair is already one the matcher refused, and an exact match must keep
+    working if that player is later rostered.
+    """
+
+    FILE = "not_matches.json"
+
+    def __init__(self, store=None):
+        self.store = store
+        self._pairs: set[tuple[str, str]] = set()
+        self.load()
+
+    @staticmethod
+    def _key(name: str, candidate: str) -> tuple[str, str]:
+        return normalize_name(name), normalize_name(candidate or "")
+
+    def load(self) -> set:
+        self._pairs = set()
+        if self.store is None:
+            return self._pairs
+        try:
+            raw = self.store.read_json(self.FILE)
+        except Exception:
+            return self._pairs
+        for entry in (raw or {}).get("pairs", []) if isinstance(raw, dict) else []:
+            if isinstance(entry, dict) and entry.get("name"):
+                self._pairs.add(self._key(entry["name"], entry.get("candidate", "")))
+        return self._pairs
+
+    def save(self) -> bool:
+        if self.store is None:
+            return False
+        payload = {"pairs": [{"name": name, "candidate": candidate}
+                             for name, candidate in sorted(self._pairs)]}
+        try:
+            return bool(self.store.write_json(
+                self.FILE, payload, "Record names that are different players"))
+        except Exception:
+            return False
+
+    def add(self, name: str, candidate: str | None) -> bool:
+        self._pairs.add(self._key(name, candidate or ""))
+        return self.save()
+
+    def contains(self, name: str, candidate: str | None) -> bool:
+        return self._key(name, candidate or "") in self._pairs
+
+    def as_list(self) -> list[dict]:
+        return [{"name": n, "candidate": c} for n, c in sorted(self._pairs)]
+
+
 class MatchResult:
     """Outcome of one name lookup."""
 

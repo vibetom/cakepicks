@@ -3,7 +3,8 @@
 import pytest
 
 from core.matching import (
-    AliasStore, NameMatcher, first_names_compatible, normalize_name,
+    AliasStore, NameMatcher, RejectionStore, first_names_compatible,
+    normalize_name,
 )
 from core.store import LocalStore
 from core.teams import ESPN_PRO_TEAM_ID, CANONICAL, normalize_team
@@ -187,3 +188,41 @@ class TestFirstNameGuard:
         entries = {"bijan": ("Bijan Robinson", "ATL")}
         matcher = NameMatcher(entries, AliasStore(LocalStore(tmp_path)), threshold=70)
         assert not matcher.match("Brian Robinson Jr.", ["ATL"]).matched
+
+
+class TestRejectionStore:
+    """Recording that two similar names are different players."""
+
+    def test_round_trip(self, tmp_path):
+        backend = LocalStore(tmp_path)
+        store = RejectionStore(backend)
+        assert store.add("Malik Washington", "Mike Washington Jr.")
+        assert RejectionStore(backend).contains("Malik Washington", "Mike Washington Jr.")
+
+    def test_matching_is_by_normalized_name(self, tmp_path):
+        store = RejectionStore(LocalStore(tmp_path))
+        store.add("Malik Washington", "Mike Washington Jr.")
+        assert store.contains("malik  washington", "Mike Washington Jr")
+
+    def test_a_different_candidate_is_not_covered(self, tmp_path):
+        """Rejecting one pair must not hide a genuine near-miss elsewhere."""
+        store = RejectionStore(LocalStore(tmp_path))
+        store.add("Malik Washington", "Mike Washington Jr.")
+        assert not store.contains("Malik Washington", "Parker Washington")
+
+    def test_no_store_is_harmless(self):
+        store = RejectionStore(None)
+        assert store.add("a", "b") is False
+        assert store.contains("a", "b") is True      # still applies in-session
+
+    def test_corrupt_file_is_ignored(self, tmp_path):
+        (tmp_path / "not_matches.json").write_text("{ not json")
+        assert RejectionStore(LocalStore(tmp_path)).as_list() == []
+
+    def test_rejection_never_blocks_a_real_match(self, tmp_path):
+        """It is display-only: if that player is later rostered, exact wins."""
+        backend = LocalStore(tmp_path)
+        RejectionStore(backend).add("Malik Washington", "Mike Washington Jr.")
+        entries = {"malik": ("Malik Washington", "MIA")}
+        matcher = NameMatcher(entries, AliasStore(backend), threshold=90)
+        assert matcher.match("Malik Washington", ["MIA"]).key == "malik"

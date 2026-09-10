@@ -276,7 +276,8 @@ persist properly, since the disk isn't ephemeral.
 | "Could not load ESPN league" | The league must be public: ESPN → League Settings → Basic Settings → Visibility → Public. Also check the season year in the sidebar. |
 | Quota exhausted (429) | You've used 500 credits this month. The app falls back to the last cached odds; selection still runs. |
 | Lots of empty slots | See "Why you may see a lot of NONE" above — usually the odds floor. |
-| A player's props are ignored | Check the **Diagnostics** tab for unmatched names and click "Alias →" to fix it. Nicknames like Kenny/Kenneth need an alias; the matcher will not guess them. |
+| A player's props are ignored | Check **Diagnostics → Names the matcher wouldn't guess** and choose *Same player* to link them. Nicknames like Kenny/Kenneth need this; the matcher will not guess them. |
+| Diagnostics lists a name that isn't your player | That is the normal case, not an error — an NFL player nobody rosters, whose name resembles one of yours. The bot has already ignored him. Click *Different player — hide this* to stop it being listed. |
 | A leg looks far too good to be true | Check **Approximate name matches** in Diagnostics. Two different players with the same surname (Brian/Bijan Robinson, Malik/Mike Washington) are the classic cause — one player's longshot price scored against another's projections. |
 | Repo doesn't show up in Streamlit | Streamlit's GitHub authorization doesn't cover it. Re-authorize and grant access to the repo. |
 | Storage says "token lacks Contents: Read and write" | The fine-grained token was created without write permission. Regenerate it with **Contents: Read and write** (Step 6.4). |

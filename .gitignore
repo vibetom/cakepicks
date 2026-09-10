@@ -10,6 +10,7 @@ data/runs/*.json
 data/odds/
 data/rosters/
 data/projections/
+data/.write-probe
 
 # Python
 .venv/

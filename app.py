@@ -22,7 +22,7 @@ from core import snapshots
 from core import scoring
 from core.betslip import leg_link, parlay_link_status
 from core.config import DEFAULTS, ODDS_TICKS, load_config, save_config
-from core.matching import AliasStore
+from core.matching import AliasStore, RejectionStore
 from core.store import build_store
 from core.projections import ProjectionError, load_projections
 from core.rosters import RosterError, fetch_league, filter_players, league_url
@@ -149,6 +149,7 @@ def init_state() -> None:
     defaults = {
         "config": load_config(store),
         "aliases": AliasStore(store),
+        "rejections": RejectionStore(store),
         "events": saved["events"],
         "raw_by_event": saved["raw_by_event"],
         "odds_fetched_at": saved["odds_fetched_at"],
@@ -176,6 +177,7 @@ store, store_warning = current_store()
 init_state()
 config = st.session_state.config
 aliases = st.session_state.aliases
+rejections = st.session_state.rejections
 
 
 # --------------------------------------------------------------------------
@@ -977,28 +979,74 @@ with tab_review:
 # --------------------------------------------------------------------------
 
 with tab_diag:
-    st.subheader("Unmatched names")
+    st.subheader("Names the matcher wouldn't guess")
     st.caption(
-        "Names the matcher refused to guess at. Adding an alias fixes it on the "
-        "next re-run without restarting the app."
+        "These looked similar to one of your players but weren't close enough "
+        "to match on their own. **Most are simply different people** — an NFL "
+        "player who isn't on anyone's roster in your league. That needs no "
+        "action: the bot has already ignored them, which is what you want. "
+        "Only alias one if it really is your player under a different spelling."
     )
-    unmatched = scored["unmatched_props"] + scored["missing_projections"]
-    if not unmatched:
-        st.success("Everything matched.")
-    for index, item in enumerate(unmatched):
+    candidates = [
+        item for item in (scored["unmatched_props"] + scored["missing_projections"])
+        if not rejections.contains(item["name"], item.get("closest"))
+    ]
+    hidden = (len(scored["unmatched_props"]) + len(scored["missing_projections"])
+              - len(candidates))
+
+    if not candidates:
+        st.success("Nothing needs your attention."
+                   + (f" ({hidden} marked as different players.)" if hidden else ""))
+    for index, item in enumerate(candidates):
         with st.container(border=True):
-            source = "odds feed" if item["source"] == "odds" else "PFF CSV"
             teams_label = ", ".join(t for t in (item.get("teams") or []) if t)
-            st.write(
-                f"**{item['name']}** ({teams_label}) — from the {source}. "
-                + (f"Closest: *{item['closest']}* ({item['score']:.0f})"
-                   if item.get("closest") else "No close match.")
-            )
+            # The two sources mean opposite things, so they are described
+            # separately: an odds name is someone the feed priced, while a CSV
+            # entry is one of your players missing from the projections file.
+            if item["source"] == "odds":
+                st.markdown(
+                    f"**{item['name']}** — priced by FanDuel in the "
+                    f"{teams_label or 'this week'} game, but not matched to "
+                    "anyone on your rosters."
+                )
+                nearest = "Nearest player on your rosters"
+            else:
+                st.markdown(
+                    f"**{item['name']}**"
+                    + (f" ({teams_label})" if teams_label else "")
+                    + " — on your roster, but no row in the PFF file matches, "
+                    "so none of their props can be scored."
+                )
+                nearest = "Nearest row in the PFF file"
             if item.get("closest"):
-                if st.button(f"Alias → {item['closest']}", key=f"alias-{index}"):
-                    if not aliases.add(item["name"], item["closest"]):
-                        st.toast("Alias applied for this session but not saved.")
-                    st.rerun()
+                st.caption(
+                    f"{nearest}: *{item['closest']}* ({item['score']:.0f}/100 "
+                    "similar). Same person, or two different players?"
+                )
+                same, different = st.columns(2)
+                with same:
+                    if st.button(f"✓ Same player — link to {item['closest']}",
+                                 key=f"alias-{index}", width="stretch"):
+                        if not aliases.add(item["name"], item["closest"]):
+                            st.toast("Alias applied for this session but not saved.")
+                        st.rerun()
+                with different:
+                    if st.button("✗ Different player — hide this",
+                                 key=f"reject-{index}", width="stretch"):
+                        rejections.add(item["name"], item["closest"])
+                        st.rerun()
+            else:
+                st.caption("No close match anywhere — nothing to do.")
+
+    if hidden:
+        with st.expander(f"Marked as different players ({hidden})"):
+            st.caption("Cleared if you ever want them back in the list above.")
+            st.json(rejections.as_list())
+            if st.button("Clear these"):
+                st.session_state.rejections = RejectionStore(store)
+                st.session_state.rejections._pairs.clear()
+                st.session_state.rejections.save()
+                st.rerun()
 
     fuzzy = scored.get("fuzzy_matches") or []
     if fuzzy:
