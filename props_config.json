@@ -1,0 +1,23 @@
+{
+  "min_gap": 0.1,
+  "min_ev": 0.15,
+  "sanity_ceiling": 0.35,
+  "hide_review": true,
+  "odds_floor": -120,
+  "odds_ceiling": null,
+  "yards_floor": 25.0,
+  "pass_yards_floor": 175.0,
+  "rush_attempts_floor": 8.0,
+  "receptions_floor": 1.0,
+  "ev_enabled": true,
+  "fuzzy_threshold": 90,
+  "markets": [
+    "player_reception_yds",
+    "player_rush_yds",
+    "player_pass_yds",
+    "player_rush_attempts",
+    "player_receptions",
+    "player_anytime_td",
+    "player_pass_tds"
+  ]
+}
