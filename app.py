@@ -1,7 +1,8 @@
 """League Parlay Bot — Streamlit UI.
 
-Builds a weekly 10-leg NFL parlay: one FanDuel player prop per fantasy team,
-overs only, hard filters, best available per team. The user places the bet.
+Builds a weekly NFL parlay: one FanDuel player prop per fantasy team, overs
+only, hard filters, best available per team. The parlay has as many legs as the
+league has teams. The user places the bet.
 """
 
 from __future__ import annotations

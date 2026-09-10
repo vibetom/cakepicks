@@ -11,7 +11,7 @@ import requests
 
 from .teams import ESPN_PRO_TEAM_ID, normalize_team
 
-LEAGUE_ID = 1490739926
+LEAGUE_ID = 563635
 DEFAULT_YEAR = 2026
 
 READ_HOST = "https://lm-api-reads.fantasy.espn.com"

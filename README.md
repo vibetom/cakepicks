@@ -1,8 +1,8 @@
 # League Parlay Bot
 
-Builds a weekly 10-leg NFL parlay for a fantasy league. Each fantasy team
-contributes exactly one leg — the best-value FanDuel player prop belonging to a
-player on that team's roster. The app picks the legs and shows its reasoning;
+Builds a weekly NFL parlay for a fantasy league — one leg per fantasy team, so
+a 10-team league gives a 10-leg parlay. Each team contributes the best-value
+FanDuel player prop belonging to a player on its roster. The app picks the legs and shows its reasoning;
 **you place the bet yourself at FanDuel.**
 
 ## Ground rules the bot follows
@@ -221,6 +221,7 @@ floor to **-120** and it will look much healthier.
 | Exclude Questionable | OFF | Off = still eligible, flagged ⚠️ |
 | Stake | $10 | Display only — the app never places a bet |
 | Season year | 2026 | ESPN season |
+| ESPN league ID | 563635 | Change this in the sidebar to point at a different league — no redeploy needed |
 | Fuzzy match threshold | 90 | Below this, a name is reported unmatched rather than guessed |
 
 Players who are OUT, on IR, suspended, doubtful, or whose NFL team has no game

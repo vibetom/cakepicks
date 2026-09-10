@@ -235,3 +235,34 @@ class TestOverrides:
         assert row_after["pick"]["prop_id"] == alternative["prop_id"]
         assert row_after["manual"] is True
         assert row_after["tier"] == "manual"
+
+
+class TestLeagueSize:
+    """The parlay has one leg per fantasy team, whatever the league size."""
+
+    @pytest.mark.parametrize("team_count", [2, 3, 8, 12])
+    def test_one_row_per_team(self, team_count, config, events, raw_by_event,
+                              projections, league, aliases):
+        # Clone the fixture league up to the requested size; extra teams have
+        # no matching props, so they exercise the empty-slot path too.
+        teams_in = []
+        for index in range(team_count):
+            source = league[index % len(league)]
+            clone = {**source, "team_id": 100 + index,
+                     "team_name": f"Team {index}",
+                     "players": [{**p, "fantasy_team_id": 100 + index}
+                                 for p in source["players"]]}
+            teams_in.append(clone)
+
+        teams = filter_players(teams_in, playing_team_codes(events))
+        scored = score_props(events=events, raw_by_event=raw_by_event, teams=teams,
+                             projections=projections, config=config, aliases=aliases)
+        picks = select_picks(scored, teams, config)
+
+        assert len(picks) == team_count
+        assert [row["team_name"] for row in picks] == [f"Team {i}" for i in range(team_count)]
+        # No player may fill two slots, even when rosters are duplicated.
+        used = [row["pick"]["player_key"] for row in picks if row["pick"]]
+        assert len(used) == len(set(used))
+        summary = combine(picks, 10.0)
+        assert summary["leg_count"] + summary["empty_count"] == team_count

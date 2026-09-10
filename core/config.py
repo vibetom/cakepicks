@@ -37,7 +37,7 @@ DEFAULTS = {
     # Misc
     "stake": 10.0,
     "season_year": 2026,
-    "league_id": 1490739926,
+    "league_id": 563635,
     "fuzzy_threshold": 90,
     "markets": [
         "player_reception_yds", "player_rush_yds", "player_pass_yds",
