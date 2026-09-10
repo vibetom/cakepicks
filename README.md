@@ -393,6 +393,10 @@ It does not touch `app.py`, and its settings are stored separately
   not the same claim: **minimum gap** for yardage props, **minimum EV** for
   receptions and touchdowns.
 - Results are one ranked table with a Why line per play, and a CSV download.
+- **Build a parlay by hand.** Tick rows in the table, press *Add selected to
+  slip*, and the slip shows combined odds, payout and a single FanDuel link
+  loading every leg — the same maths and the same link builder the parlay bot
+  uses. Legs are removed with ✕, and the slip survives a restart.
 
 **To deploy it**, create a *second* Streamlit app from this same repository:
 
@@ -402,6 +406,10 @@ It does not touch `app.py`, and its settings are stored separately
    The shared `GITHUB_REPO` is what makes both apps read one odds snapshot.
 
 Running it locally is `streamlit run props.py`.
+
+**If a leg vanishes from your slip's odds**, the market moved or was withdrawn
+between fetches, or your current thresholds now filter it out. The app says so
+rather than quietly leaving it out of the bet.
 
 **Overs only, still.** Every play is an OVER or an anytime-TD "Yes", and the
 stored snapshot has the Under side pruned out, so unders are not available here

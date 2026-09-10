@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 from core import board as board_mod
 from core import odds as odds_mod
 from core import scoring
+from core import slip as slip_mod
 from core import snapshots
 from core.betslip import leg_link
 from core.config import CEILING_TICKS, ODDS_TICKS
@@ -83,6 +84,8 @@ def init_state() -> None:
         "projections": frame,
         "projection_filename": meta.get("filename"),
         "quota": {},
+        "slip_keys": slip_mod.load_slip(store),
+        "stake": 10.0,
         "restored": bool(odds),
     })
 
@@ -401,8 +404,10 @@ else:
         "Bet": leg_link(row) or "",
     } for row in filtered])
 
-    st.dataframe(
+    st.caption("Tick a row to add it to your slip.")
+    event = st.dataframe(
         table, width="stretch", hide_index=True,
+        on_select="rerun", selection_mode="multi-row", key="board_table",
         column_config={
             "Score": st.column_config.NumberColumn("Score", format="%.1f%%",
                                                    help="Gap or EV, per the By column"),
@@ -413,9 +418,26 @@ else:
         },
     )
 
-    st.download_button(
-        "⬇️ Download these plays (CSV)", table.to_csv(index=False),
-        file_name="prop-finder.csv", mime="text/csv")
+    chosen = list(getattr(event, "selection", {}).get("rows", []) or [])
+    add_col, download_col = st.columns([2, 1])
+    with add_col:
+        if st.button(f"➕ Add {len(chosen)} selected to slip" if chosen
+                     else "➕ Add selected to slip",
+                     type="primary", width="stretch", disabled=not chosen):
+            keys = [slip_mod.leg_key(filtered[i]) for i in chosen
+                    if 0 <= i < len(filtered)]
+            before = len(st.session_state.slip_keys)
+            st.session_state.slip_keys = slip_mod.add_many(
+                st.session_state.slip_keys, keys)
+            added = len(st.session_state.slip_keys) - before
+            slip_mod.save_slip(store, st.session_state.slip_keys)
+            st.toast(f"Added {added} leg(s)." if added
+                     else "Those plays are already on the slip.")
+            st.rerun()
+    with download_col:
+        st.download_button(
+            "⬇️ Download plays (CSV)", table.to_csv(index=False),
+            file_name="prop-finder.csv", mime="text/csv", width="stretch")
 
     st.subheader("Why these numbers")
     for row in filtered[:15]:
@@ -437,6 +459,83 @@ else:
                     "This clears the sanity ceiling. An edge that big usually "
                     "means stale odds, un-priced news, or a bad name match."
                 )
+
+# --------------------------------------------------------------------------
+# The slip — plays chosen by hand, and the link to hand on
+# --------------------------------------------------------------------------
+
+st.divider()
+legs, missing_keys = slip_mod.resolve(st.session_state.slip_keys, board["rows"])
+st.subheader(f"Your slip ({len(legs)} legs)")
+
+if missing_keys:
+    st.warning(
+        f"{len(missing_keys)} leg(s) that were on the slip are no longer on the "
+        "board — the market moved, was withdrawn, or is filtered out by your "
+        "current thresholds. They are not included in the odds below."
+    )
+
+if not legs:
+    st.info("Nothing on the slip yet. Tick rows in the table above and press "
+            "**Add selected to slip**.")
+else:
+    for index, leg in enumerate(legs):
+        line = "" if leg["line"] is None else f" o{leg['line']:g}"
+        detail, remove_col = st.columns([9, 1])
+        with detail:
+            st.markdown(
+                f"**{leg['player']}** {leg['market_label']}{line} at "
+                f"**{scoring.format_american(leg['price'])}** · "
+                f"{leg.get('matchup')} · "
+                f"{'Gap' if leg['kind'] == 'gap' else 'EV'} {leg['score']:+.1%}"
+            )
+        with remove_col:
+            if st.button("✕", key=f"drop-{index}", help="Remove this leg"):
+                st.session_state.slip_keys = slip_mod.remove(
+                    st.session_state.slip_keys, slip_mod.leg_key(leg))
+                slip_mod.save_slip(store, st.session_state.slip_keys)
+                st.rerun()
+
+    st.session_state.stake = st.number_input(
+        "Stake ($)", min_value=0.0, value=float(st.session_state.stake), step=1.0,
+        help="Display only — this app never places a bet.")
+    summary = slip_mod.summarize(legs, float(st.session_state.stake))
+
+    metrics = st.columns(4)
+    metrics[0].metric("Legs", summary["leg_count"])
+    metrics[1].metric(
+        "Combined odds",
+        scoring.format_american(summary["american_odds"]) if summary["american_odds"]
+        else "—",
+        help=f"{summary['decimal_odds']:.2f} decimal" if summary["decimal_odds"] else None)
+    metrics[2].metric("Payout", f"${summary['payout']:,.2f}")
+    metrics[3].metric("Profit", f"${summary['profit']:,.2f}")
+    if summary["implied_probability"]:
+        st.caption(
+            f"Book-implied probability of hitting all {summary['leg_count']} legs: "
+            f"{summary['implied_probability']:.2%} (vig included)."
+        )
+
+    status = slip_mod.link_status(legs)
+    if status["url"]:
+        st.success(
+            f"One link that loads all {len(legs)} legs onto a FanDuel betslip."
+        )
+        st.link_button("🔗 Open this parlay on FanDuel", status["url"], type="primary")
+        st.caption("Or copy this and send it to whoever is placing the bet:")
+        st.code(status["url"], language=None)
+    else:
+        st.warning(status["reason"])
+        if status["missing"]:
+            st.caption("Legs without IDs: " + ", ".join(status["missing"]))
+
+    st.caption("Share block:")
+    st.code(slip_mod.share_text(legs, summary, status["url"]), language=None)
+
+    if st.button("🗑️ Clear the slip"):
+        st.session_state.slip_keys = []
+        slip_mod.save_slip(store, [])
+        st.rerun()
 
 with st.expander(f"Names that couldn't be matched ({len(board['unmatched'])})"):
     st.caption(
