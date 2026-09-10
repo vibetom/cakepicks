@@ -197,6 +197,11 @@ def parse_event_props(payload: dict, event: dict | None = None) -> list[dict]:
                 # Outcome-level market_sid is not something the vendor sends
                 # today; prefer the market's own sid and keep the fallback.
                 parsed["market_sid"] = parsed.get("market_sid") or market_sid
+                # `outcome_link` stays strictly the link for THIS selection.
+                # `link` may fall back to a market- or bookmaker-level URL for
+                # display, and deriving ids from that would produce the same
+                # selection id for every player in the market.
+                parsed["outcome_link"] = parsed.get("link")
                 parsed.update({
                     "event_id": event_id,
                     "home_team": home,

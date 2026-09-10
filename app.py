@@ -815,6 +815,27 @@ with tab_parlay:
         if betslip["missing"]:
             st.caption("Legs without IDs: " + ", ".join(betslip["missing"])
                        + ". The per-leg links in the table still work as a fallback.")
+        with st.expander("What the odds feed actually returned"):
+            st.caption(
+                "The combined link needs a marketId and a selectionId for every "
+                "leg. They come either from the feed's `sid` fields or from each "
+                "leg's own FanDuel link."
+            )
+            st.write(f"- Legs carrying both `sid` fields: "
+                     f"**{'yes' if betslip['has_sids'] else 'no'}**")
+            st.write(f"- Legs carrying a per-selection FanDuel link: "
+                     f"**{'yes' if betslip['has_links'] else 'no'}**")
+            if betslip["sample_link"]:
+                st.caption("Example of one leg's link:")
+                st.code(betslip["sample_link"], language=None)
+            else:
+                st.caption("No per-selection links were returned either.")
+            sample = next((row["pick"] for row in picks if row.get("pick")), None)
+            if sample:
+                st.caption("Raw ID fields on one leg:")
+                st.json({k: sample.get(k) for k in
+                         ("player_name", "market", "sid", "market_sid",
+                          "outcome_link", "link")})
 
     st.subheader("Share block")
     st.code(parlay_mod.share_text(picks, summary, parlay_url=betslip["url"]),

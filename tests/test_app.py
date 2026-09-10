@@ -686,4 +686,45 @@ class TestParlayLinkInTheUI:
         assert_no_exceptions(app)
         assert self._parlay_url(app) is None
         warnings = " ".join(w.value for w in app.warning)
-        assert "missing FanDuel's selection IDs" in warnings
+        assert "no betslip IDs" in warnings or "betslip IDs" in warnings
+
+    def test_link_fallback_works_end_to_end(self, loaded):
+        """No sids anywhere, but FanDuel links present: the link must still build."""
+        stripped = {}
+        for event_id, payload in loaded["raw_by_event"].items():
+            payload = json.loads(json.dumps(payload))
+            for bookmaker in payload["bookmakers"]:
+                for market in bookmaker["markets"]:
+                    market.pop("sid", None)
+                    for outcome in market["outcomes"]:
+                        outcome.pop("sid", None)
+                        outcome["link"] = (
+                            "https://sportsbook.fanduel.com/addToBetslip"
+                            f"?marketId[0]=42.{market['key']}"
+                            f"&selectionId[0]={abs(hash(outcome.get('description'))) % 10000}"
+                        )
+            stripped[event_id] = payload
+        loaded["raw_by_event"] = stripped
+
+        app = run_app(**loaded)
+        assert_no_exceptions(app)
+        url = self._parlay_url(app)
+        assert url, "ids should have been recovered from the per-leg links"
+        assert url.count("marketId[") == 2
+
+    def test_diagnostics_panel_appears_when_no_link_can_be_built(self, loaded):
+        stripped = {}
+        for event_id, payload in loaded["raw_by_event"].items():
+            payload = json.loads(json.dumps(payload))
+            for bookmaker in payload["bookmakers"]:
+                for market in bookmaker["markets"]:
+                    market.pop("sid", None)
+                    for outcome in market["outcomes"]:
+                        outcome.pop("sid", None)
+            stripped[event_id] = payload
+        loaded["raw_by_event"] = stripped
+
+        app = run_app(**loaded)
+        assert_no_exceptions(app)
+        body = " ".join(m.value for m in app.markdown)
+        assert "Legs carrying both" in body

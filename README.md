@@ -319,10 +319,18 @@ Two corrections were made while building against the spec:
 
 ## The FanDuel betslip link
 
-The whole-parlay link is built from source IDs the odds feed provides
-(`includeSids`). **This URL format is unofficial** — FanDuel can change it
-without notice — so treat it as a convenience, not a guarantee: whoever opens it
-should check the slip matches the table before staking anything.
+The whole-parlay link needs a `marketId` and a `selectionId` for every leg. Those
+come from the odds feed's `sid` fields when it supplies them, and otherwise are
+recovered from each leg's own FanDuel link. **This URL format is unofficial** —
+FanDuel can change it without notice — so treat it as a convenience, not a
+guarantee: whoever opens it should check the slip matches the table before
+staking anything.
+
+If no link can be built, expand **"What the odds feed actually returned"** under
+the warning. It reports whether the feed gave you IDs, links, both or neither.
+Neither means your The Odds API plan does not include `includeSids` /
+`includeLinks` — those are not available on every plan, and no amount of
+refetching will change it.
 
 The link is all-or-nothing by design. If any leg is missing its IDs, no link is
 produced and the app names the teams involved, because a partial slip that

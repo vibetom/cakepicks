@@ -5,7 +5,9 @@ import json
 import pytest
 
 from core import runlog
-from core.betslip import leg_link, parlay_link, parlay_link_status
+from core.betslip import (
+    ids_from_link, leg_ids, leg_link, parlay_link, parlay_link_status,
+)
 from core.parlay import combine, describe_prop, score_text, share_text
 
 
@@ -224,7 +226,7 @@ class TestWholeParlayLink:
         assert status["url"] is None
         assert status["missing"] == ["Team 1"]
         assert "1 of 3 legs" in status["reason"]
-        assert "Fetching fresh odds" in status["reason"]
+        assert "fetching fresh odds" in status["reason"].lower()
 
     def test_no_legs_at_all(self):
         status = parlay_link_status([{"team_id": 1, "team_name": "A", "pick": None}])
@@ -250,3 +252,97 @@ class TestWholeParlayLink:
         picks = self._picks(2)
         text = share_text(picks, combine(picks, 10.0))
         assert "FanDuel" not in text
+
+
+class TestIdsFromLinks:
+    """Falling back to FanDuel's own per-leg links when the feed omits sids."""
+
+    def _leg(self, **kwargs):
+        prop = leg(-110, sid=None, market_sid=None)
+        prop.update(kwargs)
+        return prop
+
+    @pytest.mark.parametrize("url,expected", [
+        ("https://sportsbook.fanduel.com/addToBetslip?marketId[0]=42.1&selectionId[0]=99",
+         ("42.1", "99")),
+        ("https://sportsbook.fanduel.com/addToBetslip?marketId%5B0%5D=42.2&selectionId%5B0%5D=88",
+         ("42.2", "88")),
+        ("https://sportsbook.fanduel.com/addToBetslip?marketId=42.3&selectionId=77",
+         ("42.3", "77")),
+        ("https://sportsbook.fanduel.com/addToBetslip?selectionId[0]=66&marketId[0]=42.4",
+         ("42.4", "66")),
+    ])
+    def test_parses_the_known_link_shapes(self, url, expected):
+        assert ids_from_link(url) == expected
+
+    @pytest.mark.parametrize("url", [
+        "https://sportsbook.fanduel.com/football",
+        "https://sportsbook.fanduel.com/addToBetslip?marketId[0]=42.1",   # no selection
+        "not a url", "", None, 12345,
+    ])
+    def test_unusable_links_return_none(self, url):
+        assert ids_from_link(url) is None
+
+    def test_leg_ids_fall_back_to_the_link(self):
+        prop = self._leg(outcome_link="https://sportsbook.fanduel.com/addToBetslip"
+                                      "?marketId[0]=42.9&selectionId[0]=123")
+        assert leg_ids(prop) == ("42.9", "123")
+
+    def test_sids_win_when_both_are_present(self):
+        prop = self._leg(sid="s", market_sid="m",
+                         outcome_link="https://sportsbook.fanduel.com/addToBetslip"
+                                      "?marketId[0]=other&selectionId[0]=other")
+        assert leg_ids(prop) == ("m", "s")
+
+    def test_a_shared_market_link_is_never_used_as_a_selection(self):
+        """The display link can be a market-level URL shared by every player.
+
+        Deriving ids from it would put the same selection on the slip for
+        different players, so only the outcome's own link is trusted.
+        """
+        prop = self._leg(link="https://sportsbook.fanduel.com/addToBetslip"
+                              "?marketId[0]=42.1&selectionId[0]=shared")
+        assert prop.get("outcome_link") is None
+        assert leg_ids(prop) is None
+
+    def test_a_parlay_builds_entirely_from_links(self):
+        picks = [
+            {"team_id": i, "team_name": f"Team {i}",
+             "pick": self._leg(outcome_link="https://sportsbook.fanduel.com/addToBetslip"
+                                            f"?marketId[0]=42.{i}&selectionId[0]={i}00")}
+            for i in range(3)
+        ]
+        status = parlay_link_status(picks)
+        assert status["url"]
+        assert "marketId[2]=42.2" in status["url"]
+        assert status["has_sids"] is False
+        assert status["has_links"] is True
+
+
+class TestLinkDiagnostics:
+    def test_no_ids_and_no_links_blames_the_feed_plan(self):
+        picks = [{"team_id": 1, "team_name": "A",
+                  "pick": leg(-110, sid=None, market_sid=None)}]
+        status = parlay_link_status(picks)
+        assert status["url"] is None
+        assert "includeSids" in status["reason"]
+        assert status["has_links"] is False
+
+    def test_links_present_but_unparseable_says_so(self):
+        prop = leg(-110, sid=None, market_sid=None)
+        prop["outcome_link"] = "https://sportsbook.fanduel.com/football"
+        status = parlay_link_status([{"team_id": 1, "team_name": "A", "pick": prop}])
+        assert status["url"] is None
+        assert "link format may have changed" in status["reason"]
+        assert status["sample_link"] == "https://sportsbook.fanduel.com/football"
+
+    def test_partial_failure_is_reported_differently(self):
+        good = leg(-110, sid="s", market_sid="m")
+        bad = leg(-110, sid=None, market_sid=None)
+        status = parlay_link_status([
+            {"team_id": 1, "team_name": "A", "pick": good},
+            {"team_id": 2, "team_name": "B", "pick": bad},
+        ])
+        assert "1 of 2 legs" in status["reason"]
+        assert "posted late" in status["reason"]
+        assert status["missing"] == ["B"]
