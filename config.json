@@ -1,9 +1,9 @@
 {
   "gap_threshold": 0.1,
-  "ev_threshold": 0.2,
+  "ev_threshold": 0.15,
   "sanity_ceiling": 0.35,
   "odds_floor": -120,
-  "odds_ceiling": 400,
+  "odds_ceiling": 300,
   "yards_floor": 25.0,
   "pass_yards_floor": 175.0,
   "rush_attempts_floor": 8.0,
