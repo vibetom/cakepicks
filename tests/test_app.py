@@ -402,3 +402,68 @@ class TestReviewCardRendering:
         body = " ".join(m.value for m in app.markdown)
         assert "Odds age" in body
         assert "-" not in body.split("Odds age")[1].split(".")[0]
+
+
+class TestMarketCheckboxes:
+    """The markets control, driven through the real UI."""
+
+    @pytest.fixture
+    def loaded(self, monkeypatch, events, raw_by_event, league, projections, config):
+        monkeypatch.setenv("ODDS_API_KEY", "test-key")
+        return dict(
+            config=config, events=events, raw_by_event=raw_by_event,
+            teams_raw=league, projections=projections,
+            projection_filename="week-2.csv", projection_warnings=[],
+            odds_fetched_at="2026-09-10T18:00:00+00:00",
+            roster_fetched_at="2026-09-10T18:00:00+00:00",
+            overrides={}, approved_reviews=set(), quota={},
+        )
+
+    def test_one_checkbox_per_market(self, loaded):
+        app = run_app(**loaded)
+        assert_no_exceptions(app)
+        labels = {c.label for c in app.sidebar.checkbox}
+        for expected in ("Rec Yds", "Rush Yds", "Pass Yds", "Rush Att",
+                         "Receptions", "Anytime TD", "Pass TDs"):
+            assert expected in labels
+
+    def test_all_markets_start_checked(self, loaded):
+        app = run_app(**loaded)
+        market_boxes = [c for c in app.sidebar.checkbox
+                        if c.label in {"Rec Yds", "Rush Yds", "Pass Yds", "Rush Att",
+                                       "Receptions", "Anytime TD", "Pass TDs"}]
+        assert len(market_boxes) == 7
+        assert all(c.value for c in market_boxes)
+
+    def test_unchecking_changes_the_table_without_an_api_call(self, loaded, monkeypatch):
+        """The bug this replaced: the control did nothing until a refetch."""
+        import core.odds as odds_mod
+
+        def explode(*args, **kwargs):
+            raise AssertionError("changing markets must not call the odds API")
+
+        monkeypatch.setattr(odds_mod.TheOddsAPI, "get_week_events", explode)
+        monkeypatch.setattr(odds_mod.TheOddsAPI, "get_event_props", explode)
+
+        app = run_app(**loaded)
+        before = app.dataframe[0].value
+        chase_before = before[before["Team"] == "Chase Lounge"].iloc[0]
+        assert chase_before["Prop"].startswith("Rec Yds")
+
+        next(c for c in app.sidebar.checkbox if c.label == "Rec Yds").set_value(False).run()
+        assert_no_exceptions(app)
+
+        after = app.dataframe[0].value
+        chase_after = after[after["Team"] == "Chase Lounge"].iloc[0]
+        assert not chase_after["Prop"].startswith("Rec Yds")
+
+    def test_unchecking_everything_warns(self, loaded):
+        app = run_app(**loaded)
+        for label in ("Rec Yds", "Rush Yds", "Pass Yds", "Rush Att",
+                      "Receptions", "Anytime TD", "Pass TDs"):
+            next(c for c in app.sidebar.checkbox if c.label == label).set_value(False)
+        app.run()
+        assert_no_exceptions(app)
+        assert any("No markets selected" in w.value for w in app.sidebar.warning)
+        frame = app.dataframe[0].value
+        assert all(prop == "NONE" for prop in frame["Prop"])

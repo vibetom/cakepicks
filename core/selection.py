@@ -44,7 +44,15 @@ def score_prop(prop: dict, projection: dict, config: dict) -> dict:
     out["projection_source"] = projection.get("playerName")
 
     floor, floor_label = _floor_for(market, config)
-    reasons: list[tuple[str, str]] = []   # (code, human-readable text)
+    reasons: list[tuple[str, str]] = []
+
+    # Markets the user has unchecked. Applied here rather than only at fetch
+    # time so that unchecking one re-runs selection instantly from the cached
+    # snapshot, without spending credits on a refetch.
+    enabled_markets = config.get("markets")
+    if enabled_markets is not None and market not in enabled_markets:
+        label = scoring.MARKET_LABELS.get(market, market)
+        reasons.append(("market_off", f"the {label} market is turned off"))   # (code, human-readable text)
 
     # Price floor applies to every prop type.
     try:
@@ -378,6 +386,8 @@ def _none_reason(team: dict, candidates: list[dict], config: dict) -> str:
         parts.append(f"{counts['no_line']} with no line posted")
     if counts.get("ev_off"):
         parts.append("EV props are off")
+    if counts.get("market_off"):
+        parts.append(f"{counts['market_off']} in markets you've unchecked")
     if not parts:
         return "no prop passed the filters"
     return "no prop passed the filters (" + ", ".join(parts) + ")"

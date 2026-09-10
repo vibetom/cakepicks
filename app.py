@@ -188,6 +188,34 @@ def render_sidebar() -> dict:
         new["receptions_floor"] = st.slider(
             "Receptions projection floor", 0.0, 6.0, float(config["receptions_floor"]), step=0.1)
 
+    with st.sidebar.expander("Markets", expanded=False):
+        st.caption(
+            "Unchecking a market removes it from the picks straight away, and "
+            "from the next fetch. Fewer markets cost fewer API credits."
+        )
+        selected = []
+        for heading, keys in (
+            ("Yardage — scored by gap", sorted(scoring.GAP_MARKETS)),
+            ("Expected value — scored by EV", sorted(scoring.EV_MARKETS)),
+        ):
+            st.markdown(f"**{heading}**")
+            for key in keys:
+                if st.checkbox(
+                    scoring.MARKET_LABELS.get(key, key),
+                    value=key in config.get("markets", odds_mod.DEFAULT_MARKETS),
+                    key=f"market__{key}",
+                ):
+                    selected.append(key)
+        new["markets"] = [k for k in odds_mod.DEFAULT_MARKETS if k in selected]
+
+        if not selected:
+            st.warning("No markets selected — every slot will come back NONE.")
+        else:
+            st.caption(
+                f"{len(selected)} of {len(odds_mod.DEFAULT_MARKETS)} selected · "
+                f"about {len(selected)} credits per game when you fetch."
+            )
+
     with st.sidebar.expander("Toggles", expanded=False):
         new["ev_enabled"] = st.toggle(
             "EV props enabled", value=bool(config["ev_enabled"]),
@@ -216,11 +244,6 @@ def render_sidebar() -> dict:
             "Fuzzy match threshold", 70, 100, int(config["fuzzy_threshold"]),
             help="rapidfuzz cutoff. Below this a name is reported as unmatched "
                  "rather than guessed.")
-        new["markets"] = st.multiselect(
-            "Markets to fetch", odds_mod.DEFAULT_MARKETS,
-            default=config.get("markets", odds_mod.DEFAULT_MARKETS),
-            format_func=lambda m: scoring.MARKET_LABELS.get(m, m),
-            help="Fewer markets = fewer API credits per run.")
 
     save_col, reset_col = st.sidebar.columns(2)
     with save_col:
@@ -233,6 +256,11 @@ def render_sidebar() -> dict:
     with reset_col:
         if st.button("Reset", width="stretch"):
             st.session_state.config = dict(DEFAULTS)
+            # Checkbox widgets keep their own state, so clearing the config
+            # alone would leave the old market selection on screen.
+            for key in list(st.session_state.keys()):
+                if str(key).startswith("market__"):
+                    del st.session_state[key]
             st.rerun()
 
     st.sidebar.divider()

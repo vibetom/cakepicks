@@ -266,3 +266,55 @@ class TestLeagueSize:
         assert len(used) == len(set(used))
         summary = combine(picks, 10.0)
         assert summary["leg_count"] + summary["empty_count"] == team_count
+
+
+class TestMarketFilter:
+    """Unchecking a market must change the picks, not just the next fetch.
+
+    The cached odds snapshot holds every market that was fetched, so this
+    filter has to be applied at scoring time or the control does nothing until
+    the user spends credits refetching.
+    """
+
+    def test_unchecked_market_is_excluded_with_a_reason(self, run, config):
+        result = run(config, markets=["player_reception_yds"])
+        rush = [p for p in props_for(result, 2) if p["market"] == "player_rush_yds"]
+        assert rush
+        assert not rush[0]["eligible"]
+        assert "market_off" in rush[0]["exclusion_codes"]
+        assert "Rush Yds" in rush[0]["exclusion_reason"]
+
+    def test_picks_change_without_refetching(self, run, config):
+        """Same cached payload, different markets, different answer."""
+        everything = run(config, sanity_ceiling=5.0)
+        narrowed = run(config, sanity_ceiling=5.0, markets=["player_reception_yds"])
+
+        jacobs_before = pick_for(everything, "Jacobs Ladder")
+        jacobs_after = pick_for(narrowed, "Jacobs Ladder")
+        assert jacobs_before["pick"] is not None
+        assert jacobs_before["pick"]["market"] != "player_reception_yds"
+        # Jacobs has no receiving-yards prop, so his slot must empty out.
+        assert jacobs_after["pick"] is None
+
+    def test_only_selected_markets_can_be_picked(self, run, config):
+        allowed = ["player_rush_yds", "player_pass_yds"]
+        result = run(config, markets=allowed, sanity_ceiling=5.0)
+        for row in result["picks"]:
+            if row["pick"]:
+                assert row["pick"]["market"] in allowed
+
+    def test_empty_selection_empties_the_parlay(self, run, config):
+        result = run(config, markets=[])
+        assert all(row["pick"] is None for row in result["picks"])
+        assert all(row["none_reason"] for row in result["picks"])
+
+    def test_none_reason_names_the_unchecked_markets(self, run, config):
+        result = run(config, markets=[])
+        reason = pick_for(result, "Chase Lounge")["none_reason"]
+        assert "unchecked" in reason
+
+    def test_missing_markets_key_means_no_filtering(self, run, config):
+        """An older saved config without the key must not silently drop props."""
+        legacy = {k: v for k, v in config.items() if k != "markets"}
+        result = run(legacy, sanity_ceiling=5.0)
+        assert any(row["pick"] for row in result["picks"])

@@ -159,7 +159,8 @@ tells you so, and the Download buttons still let you keep records by hand.
    and mark each leg Win/Loss/Push — the season totals build up from there.
 
 Free tier is 500 credits/month, so about 4–5 full fetches. If you're running
-short, trim the **Markets to fetch** list under **Misc** in the sidebar.
+short, uncheck markets under **Markets** in the sidebar — each one you drop
+saves about one credit per game.
 
 ---
 
@@ -223,6 +224,7 @@ floor to **-120** and it will look much healthier.
 | Season year | 2026 | ESPN season |
 | ESPN league ID | 563635 | Change this in the sidebar to point at a different league — no redeploy needed |
 | Fuzzy match threshold | 90 | Below this, a name is reported unmatched rather than guessed |
+| Markets | all 7 | Unchecking one drops it from the picks immediately and from the next fetch |
 
 Players who are OUT, on IR, suspended, doubtful, or whose NFL team has no game
 in the window are always excluded — those are not adjustable.
