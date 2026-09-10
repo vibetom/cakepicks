@@ -18,6 +18,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from core import board as board_mod
+from core import gate as gate_mod
 from core import odds as odds_mod
 from core import scoring
 from core import slip as slip_mod
@@ -54,6 +55,12 @@ def get_store(fingerprint: str, repo: str, branch: str):
          "GITHUB_DATA_BRANCH": branch},
         root="data",
     )
+
+
+# Gate before any work: a locked-out visitor should not trigger a GitHub read,
+# and certainly not reach the button that spends API credits.
+if not gate_mod.require_password(get_secret(gate_mod.SECRET_NAME)):
+    st.stop()
 
 
 token = get_secret("GITHUB_TOKEN")

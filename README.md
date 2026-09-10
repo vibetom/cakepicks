@@ -407,6 +407,27 @@ It does not touch `app.py`, and its settings are stored separately
 
 Running it locally is `streamlit run props.py`.
 
+### Password-protecting it
+
+Streamlit's free tier allows only one private app, so if the parlay bot is
+already using that allowance the Prop Finder has to be public. Set a password
+instead: add one more line to **that app's** secrets (⋮ → Settings → Secrets):
+
+```toml
+APP_PASSWORD = "pick-something-long"
+```
+
+The app restarts and asks for it before rendering anything. Leave the line out
+and there is no gate at all, so the parlay bot is unaffected.
+
+**What this does and doesn't do.** It stops someone who finds the URL from
+using the app — no fetching, no credits spent, no writes to your data branch.
+The gate runs before any of that, so a locked-out visitor doesn't even cause a
+GitHub read. It is *not* authentication: one shared password, no accounts, and
+anyone you give it to has full use of the app. Your keys never reach the
+browser either way — everything runs server-side — so the password is
+protecting your API budget, not a secret.
+
 **If a leg vanishes from your slip's odds**, the market moved or was withdrawn
 between fetches, or your current thresholds now filter it out. The app says so
 rather than quietly leaving it out of the bet.
