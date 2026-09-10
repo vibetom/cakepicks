@@ -255,6 +255,26 @@ def _parse_outcome(outcome: dict, market_key: str) -> dict | None:
     }
 
 
+def markets_in_snapshot(raw_by_event: dict) -> set[str]:
+    """Market keys that actually appear in a cached odds payload.
+
+    Selecting a market only affects the next fetch; a snapshot taken with a
+    narrower selection simply has no data for it, and nothing downstream can
+    invent any.
+    """
+    present = set()
+    for payload in (raw_by_event or {}).values():
+        if not isinstance(payload, dict):
+            continue
+        for bookmaker in payload.get("bookmakers") or []:
+            if bookmaker.get("key") != BOOKMAKER:
+                continue
+            for market in bookmaker.get("markets") or []:
+                if market.get("outcomes"):
+                    present.add(market.get("key"))
+    return present
+
+
 def market_coverage(events: list[dict], raw_by_event: dict, markets: list[str]) -> dict:
     """Per-market count of events that actually posted that market.
 

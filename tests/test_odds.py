@@ -1,6 +1,7 @@
 """Odds payload parsing, windows, and coverage (§5, §13)."""
 
 import datetime as dt
+import json
 
 import pytest
 
@@ -156,3 +157,37 @@ class TestSourceIds:
                            {"name": "Over", "description": "Josh Jacobs",
                             "price": -110, "point": 60.5}]}]}]}
         assert odds_mod.parse_event_props(payload)[0]["market_sid"] is None
+
+
+class TestMarketsInSnapshot:
+    """What a cached snapshot actually contains, versus what is selected."""
+
+    def test_lists_the_markets_present(self, raw_by_event):
+        present = odds_mod.markets_in_snapshot(raw_by_event)
+        assert "player_reception_yds" in present
+        assert "player_anytime_td" in present
+
+    def test_a_market_never_fetched_is_absent(self, raw_by_event):
+        """The case from a live run: receptions ticked but never fetched."""
+        stripped = {}
+        for event_id, payload in raw_by_event.items():
+            payload = json.loads(json.dumps(payload))
+            for bookmaker in payload["bookmakers"]:
+                bookmaker["markets"] = [m for m in bookmaker["markets"]
+                                        if m["key"] != "player_receptions"]
+            stripped[event_id] = payload
+        assert "player_receptions" not in odds_mod.markets_in_snapshot(stripped)
+
+    def test_an_empty_market_does_not_count_as_present(self):
+        payload = {"bookmakers": [{"key": "fanduel", "markets": [
+            {"key": "player_receptions", "outcomes": []}]}]}
+        assert odds_mod.markets_in_snapshot({"e": payload}) == set()
+
+    def test_other_bookmakers_are_ignored(self):
+        payload = {"bookmakers": [{"key": "draftkings", "markets": [
+            {"key": "player_receptions", "outcomes": [{"name": "Over"}]}]}]}
+        assert odds_mod.markets_in_snapshot({"e": payload}) == set()
+
+    def test_empty_input(self):
+        assert odds_mod.markets_in_snapshot({}) == set()
+        assert odds_mod.markets_in_snapshot(None) == set()

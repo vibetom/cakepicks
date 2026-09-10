@@ -854,3 +854,83 @@ class TestDiagnosticsChoices:
         body = " ".join(m.value for m in app.markdown)
         assert "priced by FanDuel" in body
         assert "not matched to anyone on your rosters" in body
+
+
+class TestSelectedButUnfetchedMarkets:
+    """A market ticked in the sidebar but absent from the cached snapshot."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_caches(self):
+        import streamlit as st
+        st.cache_resource.clear()
+        st.cache_data.clear()
+        yield
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+    @pytest.fixture
+    def narrow_snapshot(self, monkeypatch, tmp_path, events, raw_by_event,
+                        league, projections, config):
+        """Reproduces the live case: fetched with 5 markets, 7 now selected."""
+        monkeypatch.setenv("ODDS_API_KEY", "test-key")
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("GITHUB_REPO", raising=False)
+        monkeypatch.chdir(tmp_path)
+        narrowed = {}
+        for event_id, payload in raw_by_event.items():
+            payload = json.loads(json.dumps(payload))
+            for bookmaker in payload["bookmakers"]:
+                bookmaker["markets"] = [m for m in bookmaker["markets"]
+                                        if m["key"] != "player_receptions"]
+            narrowed[event_id] = payload
+        fetched = [m for m in DEFAULT_MARKETS if m != "player_receptions"]
+        return dict(
+            config={**config, "markets": list(DEFAULT_MARKETS)},
+            events=events, raw_by_event=narrowed, odds_markets=fetched,
+            teams_raw=league, projections=projections,
+            projection_filename="week-2.csv", projection_warnings=[],
+            odds_fetched_at="2026-09-10T18:00:00+00:00",
+            roster_fetched_at="2026-09-10T18:00:00+00:00",
+            overrides={}, approved_reviews=set(), quota={},
+        )
+
+    def test_it_says_the_market_cannot_appear(self, narrow_snapshot):
+        app = run_app(**narrow_snapshot)
+        assert_no_exceptions(app)
+        warnings = " ".join(w.value for w in app.warning)
+        assert "Receptions" in warnings
+        assert "can't appear in any pick" in warnings
+        assert "narrower selection" in warnings
+
+    def test_it_estimates_the_cost_of_refetching(self, narrow_snapshot):
+        app = run_app(**narrow_snapshot)
+        warnings = " ".join(w.value for w in app.warning)
+        assert "extra credits" in warnings
+
+    def test_no_warning_when_the_snapshot_matches(self, monkeypatch, tmp_path,
+                                                  events, raw_by_event, league,
+                                                  projections, config):
+        monkeypatch.setenv("ODDS_API_KEY", "test-key")
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.chdir(tmp_path)
+        app = run_app(
+            config=config, events=events, raw_by_event=raw_by_event,
+            odds_markets=list(config["markets"]), teams_raw=league,
+            projections=projections, projection_filename="w.csv",
+            odds_fetched_at="2026-09-10T18:00:00+00:00",
+            roster_fetched_at="2026-09-10T18:00:00+00:00",
+            overrides={}, approved_reviews=set(), quota={},
+        )
+        assert_no_exceptions(app)
+        warnings = " ".join(w.value for w in app.warning)
+        assert "can't appear in any pick" not in warnings
+
+    def test_a_fetched_but_unposted_market_reads_differently(
+        self, narrow_snapshot
+    ):
+        """Fetched-but-unposted is the book's doing, not a stale selection."""
+        narrow_snapshot["odds_markets"] = list(DEFAULT_MARKETS)   # it was fetched
+        app = run_app(**narrow_snapshot)
+        assert_no_exceptions(app)
+        info = " ".join(i.value for i in app.info)
+        assert "hasn't posted" in info

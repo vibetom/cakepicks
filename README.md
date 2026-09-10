@@ -244,7 +244,7 @@ floor to **-120** and it will look much healthier.
 | Season year | 2026 | ESPN season |
 | ESPN league ID | 563635 | Change this in the sidebar to point at a different league — no redeploy needed |
 | Fuzzy match threshold | 90 | Below this, a name is reported unmatched rather than guessed. Names with disagreeing first names are rejected at any score, so a lower cutoff is safer than it looks |
-| Markets | all 7 | Unchecking one drops it from the picks immediately and from the next fetch |
+| Markets | all 7 | Unchecking one drops it from the picks immediately and from the next fetch. Re-checking is **not** symmetric: a market can only appear if it was included when the odds were fetched, so re-check it *then fetch fresh odds* |
 
 Players who are OUT, on IR, suspended, doubtful, or whose NFL team has no game
 in the window are always excluded — those are not adjustable.
@@ -276,6 +276,7 @@ persist properly, since the disk isn't ephemeral.
 | "Could not load ESPN league" | The league must be public: ESPN → League Settings → Basic Settings → Visibility → Public. Also check the season year in the sidebar. |
 | Quota exhausted (429) | You've used 500 credits this month. The app falls back to the last cached odds; selection still runs. |
 | Lots of empty slots | See "Why you may see a lot of NONE" above — usually the odds floor. |
+| A whole market never appears, even in the override lists | The cached snapshot was fetched while that market was unchecked, so it holds no prices for it. The app now says so above the results; fetch fresh odds to include it. |
 | A player's props are ignored | Check **Diagnostics → Names the matcher wouldn't guess** and choose *Same player* to link them. Nicknames like Kenny/Kenneth need this; the matcher will not guess them. |
 | Diagnostics lists a name that isn't your player | That is the normal case, not an error — an NFL player nobody rosters, whose name resembles one of yours. The bot has already ignored him. Click *Different player — hide this* to stop it being listed. |
 | A leg looks far too good to be true | Check **Approximate name matches** in Diagnostics. Two different players with the same surname (Brian/Bijan Robinson, Malik/Mike Washington) are the classic cause — one player's longshot price scored against another's projections. |

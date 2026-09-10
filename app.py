@@ -112,6 +112,7 @@ def restore_saved_state() -> dict:
         restored["raw_by_event"] = odds.get("raw_by_event") or {}
         restored["odds_fetched_at"] = odds.get("fetched_at") or odds.get("saved_at")
         restored["odds_saved_at"] = odds.get("saved_at")
+        restored["odds_markets"] = odds.get("markets") or []
         restored["restored"].append("odds")
 
     rosters = snapshots.load_rosters(store)
@@ -154,6 +155,7 @@ def init_state() -> None:
         "raw_by_event": saved["raw_by_event"],
         "odds_fetched_at": saved["odds_fetched_at"],
         "odds_saved_at": saved.get("odds_saved_at"),
+        "odds_markets": saved.get("odds_markets") or [],
         "quota": {},
         "teams_raw": saved["teams_raw"],
         "roster_fetched_at": saved["roster_fetched_at"],
@@ -391,6 +393,7 @@ def fetch_odds(window_start: dt.datetime, window_end: dt.datetime) -> None:
     st.session_state.events = events
     st.session_state.raw_by_event = raw
     st.session_state.odds_fetched_at = fetched_at
+    st.session_state.odds_markets = list(config["markets"])
     st.session_state.quota = provider.quota
     st.session_state.last_error = "; ".join(failures) if failures else None
 
@@ -801,6 +804,29 @@ picks = select_picks(
 summary = parlay_mod.combine(picks, float(config["stake"]))
 coverage = odds_mod.market_coverage(events, st.session_state.raw_by_event, config["markets"])
 
+# A market can be ticked in the sidebar and still be absent from the cached
+# snapshot, because the selection only ever affected the next fetch. Silence
+# there reads as "the bot ignores this market".
+present_markets = odds_mod.markets_in_snapshot(st.session_state.raw_by_event)
+fetched_markets = set(st.session_state.get("odds_markets") or [])
+absent = [m for m in config["markets"] if m not in present_markets]
+never_fetched = [m for m in absent if fetched_markets and m not in fetched_markets]
+if absent:
+    names = ", ".join(scoring.MARKET_LABELS.get(m, m) for m in absent)
+    if never_fetched:
+        st.warning(
+            f"**{names} can't appear in any pick.** These are ticked under "
+            "**Markets**, but the odds snapshot you're looking at was fetched "
+            "with a narrower selection, so it holds no prices for them. "
+            f"Fetching fresh odds would include them — about "
+            f"{len(absent) * max(len(events), 1)} extra credits."
+        )
+    else:
+        st.info(
+            f"**{names}**: selected and fetched, but FanDuel hasn't posted any "
+            "of these props for this slate yet. Refetch closer to game day."
+        )
+
 tab_parlay, tab_review, tab_diag, tab_history = st.tabs(
     ["Parlay", "Review & overrides", "Diagnostics", "History"]
 )
@@ -912,9 +938,16 @@ with tab_parlay:
         total = coverage["total_events"]
         for market, count in coverage["by_market"].items():
             label = scoring.MARKET_LABELS.get(market, market)
-            st.write(f"- **{label}**: {count}/{total} games posted")
+            if market in never_fetched:
+                st.write(f"- **{label}**: not in this snapshot — it wasn't fetched")
+            else:
+                st.write(f"- **{label}**: {count}/{total} games posted")
         if any(c < total for c in coverage["by_market"].values()):
-            st.caption("Books post some props late. Refetch closer to game day for full coverage.")
+            st.caption(
+                "A market showing fewer games than the total was fetched but not "
+                "fully posted — books add props through the week. One marked "
+                "\"wasn't fetched\" needs a fresh fetch instead."
+            )
 
 
 # --------------------------------------------------------------------------
