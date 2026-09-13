@@ -32,6 +32,23 @@ from .selection import score_prop
 
 PROPS_CONFIG_FILE = "props_config.json"
 
+#: The touchdown markets, for the "touchdowns only" filter.
+TD_MARKETS = ("player_anytime_td", "player_pass_tds")
+
+#: Why a scored prop did not make the list, in words.
+BLOCKING_LABELS = {
+    "price_ceiling": "longer than the odds ceiling",
+    "price_floor": "shorter than the odds floor",
+    "volume_floor": "below a volume floor",
+    "ev_off": "EV props are turned off",
+    "market_off": "in an unchecked market",
+    "no_line": "no line posted",
+    "sanity_ceiling": "above the sanity ceiling",
+    "below_min_ev": "below the minimum EV",
+    "below_min_gap": "below the minimum gap",
+    "unscored": "couldn't be scored",
+}
+
 #: The prop finder's own tunables, stored separately so the two apps do not
 #: overwrite each other's settings while sharing their data.
 PROPS_DEFAULTS = {
@@ -236,6 +253,48 @@ def qualifying(rows: list[dict], config: dict) -> list[dict]:
             continue
         out.append(row)
     return sorted(out, key=lambda r: -r["score"])
+
+
+def blocking_reasons(rows: list[dict], config: dict) -> dict[str, int]:
+    """Why each scored prop failed to make the list, counted by cause.
+
+    A prop can trip several filters; only the first is counted, so the numbers
+    add up to the props that did not qualify. Without this, tightening a filter
+    and seeing an empty board looks like a fault rather than a setting.
+    """
+    min_gap = float(config.get("min_gap", 0.0))
+    min_ev = float(config.get("min_ev", 0.0))
+    hide_review = bool(config.get("hide_review", True))
+
+    counts: dict[str, int] = {}
+
+    def bump(code):
+        counts[code] = counts.get(code, 0) + 1
+
+    for row in rows:
+        if row.get("score") is None:
+            bump("unscored")
+            continue
+        blocked = [c for c in (row.get("exclusion_codes") or [])
+                   if c != "sanity_ceiling"]
+        if blocked:
+            bump(blocked[0])
+            continue
+        if row.get("needs_review") and hide_review:
+            bump("sanity_ceiling")
+            continue
+        if row["kind"] == "gap" and row["score"] < min_gap:
+            bump("below_min_gap")
+        elif row["kind"] == "ev" and row["score"] < min_ev:
+            bump("below_min_ev")
+    return counts
+
+
+def describe_blocking(counts: dict[str, int], limit: int = 4) -> str:
+    """The main reasons, largest first, as a readable phrase."""
+    ranked = sorted(counts.items(), key=lambda item: -item[1])[:limit]
+    return ", ".join(
+        f"{count} {BLOCKING_LABELS.get(code, code)}" for code, count in ranked)
 
 
 def filter_options(rows: list[dict]) -> dict:

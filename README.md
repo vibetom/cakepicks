@@ -389,6 +389,14 @@ It does not touch `app.py`, and its settings are stored separately
 - Filters live on the page rather than the sidebar: game, team, position,
   player, market, and whether a play is scored by gap or EV. Their options come
   from whatever slate is loaded, so they always match the data.
+- A **Touchdowns only** toggle above the filters cuts the board to anytime
+  touchdown scorers and passing touchdowns. It replaces the Market filter
+  rather than narrowing it — that control greys out while the toggle is on, so
+  the two can never contradict each other. Touchdown props are long-priced by
+  nature, so the +300 odds ceiling hides most of them: on one real slate only 1
+  of 406 touchdown props qualified at the defaults, 5 at +600 and 20 with no
+  ceiling. When the list comes back short the app says which setting trimmed
+  it, so a tight ceiling doesn't look like a fault.
 - Two listing thresholds instead of tiers, because a 10% gap and a 10% EV are
   not the same claim: **minimum gap** for yardage props, **minimum EV** for
   receptions and touchdowns.

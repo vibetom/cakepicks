@@ -352,6 +352,12 @@ options = board_mod.filter_options(board["rows"])
 # --------------------------------------------------------------------------
 
 st.subheader("Filters")
+td_only = st.toggle(
+    "🏈 Touchdowns only",
+    help="Anytime touchdown scorers and passing touchdowns, nothing else. "
+         "While this is on, the Market filter is ignored.",
+)
+
 row1 = st.columns([2, 1, 1])
 picked_games = row1[0].multiselect("Game", options["matchups"],
                                    placeholder="All games")
@@ -364,16 +370,24 @@ row2 = st.columns([2, 2, 1])
 picked_players = row2[0].multiselect("Player", options["players"],
                                      placeholder="All players")
 picked_markets = row2[1].multiselect(
-    "Market", options["markets"], placeholder="All markets",
+    "Market", options["markets"],
+    placeholder="Touchdown markets" if td_only else "All markets",
+    disabled=td_only,
     format_func=lambda m: scoring.MARKET_LABELS.get(m, m))
 picked_kinds = row2[2].multiselect(
     "Scored by", options["kinds"], placeholder="Gap and EV",
     format_func=lambda k: "Gap (yardage)" if k == "gap" else "EV (receptions, TDs)")
 
-filtered = board_mod.apply_filters(
-    plays, matchups=picked_games, teams=picked_teams, players=picked_players,
-    positions=picked_positions, markets=picked_markets, kinds=picked_kinds,
-)
+# The toggle replaces the market filter rather than narrowing it, so the two
+# can never contradict each other.
+market_filter = list(board_mod.TD_MARKETS) if td_only else picked_markets
+
+page_filters = {
+    "matchups": picked_games, "teams": picked_teams, "players": picked_players,
+    "positions": picked_positions, "markets": market_filter,
+    "kinds": picked_kinds,
+}
+filtered = board_mod.apply_filters(plays, **page_filters)
 
 
 # --------------------------------------------------------------------------
@@ -382,16 +396,49 @@ filtered = board_mod.apply_filters(
 
 st.subheader(f"Best plays ({len(filtered)})")
 if not filtered:
-    st.info(
-        "Nothing passes those filters. The listing thresholds in the sidebar "
-        "are usually the reason — try lowering the minimum gap or EV."
-    )
+    # An empty board is nearly always a setting rather than a thin slate, so
+    # say which setting: counting the reasons is the difference between "this
+    # is broken" and "your odds ceiling is at +300".
+    considered = board_mod.apply_filters(board["rows"], **page_filters)
+    reasons = board_mod.describe_blocking(
+        board_mod.blocking_reasons(considered, config))
+    if not considered:
+        st.info(
+            "No props on this slate match those filters."
+            + (" Touchdown markets have to be ticked in the sidebar **before** "
+               "odds are fetched — if they weren't, this snapshot doesn't "
+               "contain them and a fresh fetch is needed."
+               if td_only else "")
+        )
+    elif reasons:
+        st.info(
+            f"None of the {len(considered)} matching props qualify: {reasons}. "
+            "Those are all sidebar settings — the odds ceiling and the minimum "
+            "EV are the usual reason."
+        )
+    else:
+        st.info(
+            "Nothing passes those filters. The listing thresholds in the "
+            "sidebar are usually the reason — try lowering the minimum gap or EV."
+        )
 else:
     st.caption(
         f"{len(board['rows'])} props scored across {len(events)} games. "
         "**Gap and EV are different measures** — a +40% gap and a +40% EV are "
         "not the same claim — so compare within a kind, not across."
     )
+    if len(filtered) < 5:
+        # A short list reads as a fault unless it says what trimmed it. On a
+        # real slate the +300 ceiling alone hides most touchdown props.
+        considered = board_mod.apply_filters(board["rows"], **page_filters)
+        reasons = board_mod.describe_blocking(
+            board_mod.blocking_reasons(considered, config))
+        if reasons:
+            st.caption(
+                f"Only {len(filtered)} of the {len(considered)} props matching "
+                f"these filters made the list; the others: {reasons}. Those are "
+                "all sidebar settings."
+            )
     # Percentages are scaled here, not in the format string: Streamlit runs
     # printf against the raw value, so 0.457 with "%.1f%%" renders as "0.5%".
     table = pd.DataFrame([{

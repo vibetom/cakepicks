@@ -191,3 +191,107 @@ class TestPercentPresentation:
                 value = row.get(key)
                 if value is not None:
                     assert 0.0 <= value <= 1.0
+
+
+class TestTouchdownsOnly:
+    """The market keys behind the "touchdowns only" toggle."""
+
+    def test_it_names_both_touchdown_markets(self):
+        assert set(board_mod.TD_MARKETS) == {"player_anytime_td", "player_pass_tds"}
+
+    def test_every_one_is_a_real_market(self):
+        from core.odds import DEFAULT_MARKETS
+
+        assert set(board_mod.TD_MARKETS) <= set(DEFAULT_MARKETS)
+
+    def test_they_are_all_scored_by_ev(self):
+        """Touchdowns have a Poisson model, so none of them score by gap."""
+        from core import scoring
+
+        assert set(board_mod.TD_MARKETS) <= set(scoring.EV_MARKETS)
+
+    def test_filtering_to_them_leaves_only_touchdown_props(self, scored):
+        rows = board_mod.apply_filters(scored["rows"],
+                                       markets=list(board_mod.TD_MARKETS))
+        assert rows
+        assert all(r["market"] in board_mod.TD_MARKETS for r in rows)
+
+    def test_it_excludes_yardage_and_receptions(self, scored):
+        rows = board_mod.apply_filters(scored["rows"],
+                                       markets=list(board_mod.TD_MARKETS))
+        assert not any(r["market"] in ("player_reception_yds", "player_receptions")
+                       for r in rows)
+
+
+class TestBlockingReasons:
+    """Why an empty board is empty.
+
+    Without this a tightened setting is indistinguishable from a broken app:
+    on a real slate the +300 ceiling alone hides most touchdown props.
+    """
+
+    def test_the_counts_add_up_to_the_props_that_did_not_qualify(self, scored, config):
+        rows = scored["rows"]
+        listed = board_mod.qualifying(rows, config)
+        counts = board_mod.blocking_reasons(rows, config)
+        assert sum(counts.values()) == len(rows) - len(listed)
+
+    def test_nothing_is_counted_when_everything_qualifies(self, scored):
+        loose = {"min_gap": -99, "min_ev": -99, "hide_review": False}
+        rows = [r for r in scored["rows"]
+                if r.get("score") is not None and not [
+                    c for c in (r.get("exclusion_codes") or [])
+                    if c != "sanity_ceiling"]]
+        assert board_mod.blocking_reasons(rows, loose) == {}
+
+    def test_a_price_ceiling_is_reported_as_such(self, events, raw_by_event,
+                                                 projections, config, tmp_path):
+        tight = {**config, "odds_ceiling": -300}
+        result = board_mod.score_board(
+            events=events, raw_by_event=raw_by_event, projections=projections,
+            config=tight, aliases=AliasStore(LocalStore(tmp_path)))
+        assert not board_mod.qualifying(result["rows"], tight)
+        assert board_mod.blocking_reasons(result["rows"], tight)["price_ceiling"]
+
+    def test_a_minimum_is_reported_separately_from_a_hard_filter(self, scored):
+        strict = {"min_gap": 9.99, "min_ev": 9.99, "hide_review": True}
+        counts = board_mod.blocking_reasons(scored["rows"], strict)
+        assert counts.get("below_min_gap")
+        assert counts.get("below_min_ev")
+
+    def test_only_the_first_cause_is_counted_per_prop(self, scored):
+        """A prop failing three filters must not be counted three times."""
+        strict = {"min_gap": 9.99, "min_ev": 9.99, "hide_review": True}
+        counts = board_mod.blocking_reasons(scored["rows"], strict)
+        assert sum(counts.values()) == len(scored["rows"])
+
+    def test_an_unscored_prop_is_accounted_for(self, config):
+        counts = board_mod.blocking_reasons([{"score": None, "kind": "gap"}], config)
+        assert counts == {"unscored": 1}
+
+
+class TestDescribeBlocking:
+    def test_it_reads_as_a_sentence_fragment(self):
+        text = board_mod.describe_blocking({"price_ceiling": 255, "below_min_ev": 126})
+        assert text == ("255 longer than the odds ceiling, "
+                        "126 below the minimum EV")
+
+    def test_the_biggest_cause_comes_first(self):
+        text = board_mod.describe_blocking({"below_min_ev": 2, "price_ceiling": 40})
+        assert text.startswith("40 longer than the odds ceiling")
+
+    def test_it_stops_at_the_limit(self):
+        counts = {code: index + 1
+                  for index, code in enumerate(board_mod.BLOCKING_LABELS)}
+        assert board_mod.describe_blocking(counts, limit=2).count(",") == 1
+
+    def test_nothing_blocking_says_nothing(self):
+        assert board_mod.describe_blocking({}) == ""
+
+    def test_every_code_scoring_can_raise_has_a_label(self, scored, config):
+        """A raw code like "price_ceiling" must never reach the page."""
+        strict = {**config, "min_gap": 9.99, "min_ev": 9.99, "odds_ceiling": -300}
+        counts = board_mod.blocking_reasons(scored["rows"], strict)
+        assert counts
+        for code in counts:
+            assert code in board_mod.BLOCKING_LABELS
