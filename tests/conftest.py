@@ -11,8 +11,30 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core.config import DEFAULTS  # noqa: E402
 from core.matching import AliasStore  # noqa: E402
+from core.odds import default_window  # noqa: E402
 from core.projections import load_projections  # noqa: E402
 from core.store import LocalStore  # noqa: E402
+
+
+def _kickoffs():
+    """Two kickoff times inside the current default event window.
+
+    These must not be hardcoded. filter_events drops games in the past, so a
+    fixed date gives the whole suite a shelf life of one NFL week: every
+    full-render test starts failing the following Tuesday, with an error about
+    the date window rather than anything it was testing.
+
+    Placed a quarter and a half of the way through the window so they stay
+    inside it however narrow it is -- the window shrinks to almost nothing when
+    the clock is just before Tuesday noon UTC.
+    """
+    start, end = default_window()
+    span = end - start
+    return ((start + span / 4).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            (start + span / 2).replace(microsecond=0).isoformat().replace("+00:00", "Z"))
+
+
+EARLY_GAME, LATE_GAME = _kickoffs()
 
 
 @pytest.fixture
@@ -33,10 +55,10 @@ def aliases(store):
 @pytest.fixture
 def events():
     return [
-        {"id": "evt-cin-ne", "commence_time": "2026-09-13T17:00:00Z",
+        {"id": "evt-cin-ne", "commence_time": EARLY_GAME,
          "home_team": "Cincinnati Bengals", "away_team": "New England Patriots",
          "home_code": "CIN", "away_code": "NE"},
-        {"id": "evt-gb-chi", "commence_time": "2026-09-13T20:25:00Z",
+        {"id": "evt-gb-chi", "commence_time": LATE_GAME,
          "home_team": "Green Bay Packers", "away_team": "Chicago Bears",
          "home_code": "GB", "away_code": "CHI"},
     ]
@@ -55,7 +77,7 @@ def _outcome(name, description, price, point=None, sid=None):
 def raw_by_event():
     """FanDuel payloads for two games, covering every market shape."""
     cin_ne = {
-        "id": "evt-cin-ne", "commence_time": "2026-09-13T17:00:00Z",
+        "id": "evt-cin-ne", "commence_time": EARLY_GAME,
         "home_team": "Cincinnati Bengals", "away_team": "New England Patriots",
         "bookmakers": [{
             "key": "fanduel", "title": "FanDuel", "last_update": "2026-09-12T12:00:00Z",
@@ -84,7 +106,7 @@ def raw_by_event():
         }],
     }
     gb_chi = {
-        "id": "evt-gb-chi", "commence_time": "2026-09-13T20:25:00Z",
+        "id": "evt-gb-chi", "commence_time": LATE_GAME,
         "home_team": "Green Bay Packers", "away_team": "Chicago Bears",
         "bookmakers": [{
             "key": "fanduel", "title": "FanDuel", "last_update": "2026-09-12T12:00:00Z",
