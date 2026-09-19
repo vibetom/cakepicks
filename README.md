@@ -234,6 +234,50 @@ back to each team's next-best prop.
 Anytime TD is where these turn up, since a low-usage player's TD price runs
 long. If you want some of them back, slide the ceiling to +400.
 
+### Same-team clashes
+
+Each leg is chosen for its own fantasy team, in isolation, so nothing used to
+stop two of them landing on the same NFL offence and competing for the same
+football. Two receivers need the same catches; a quarterback's passing yards
+and his own back's carries want the ball going opposite ways.
+
+These pairs are now ruled out when both legs are on **the same NFL team**:
+
+| Not allowed together | Why |
+|---|---|
+| two receiving-yards legs | same catches |
+| two rushing-yards legs | same carries |
+| two receptions legs | same targets |
+| two rush-attempts legs | same carries |
+| two passing-yards legs | one quarterback's production |
+| passing yards + rushing yards | the offence can only lean one way |
+| passing yards + rush attempts | same |
+| two touchdown legs | same trips to the end zone |
+
+**One exception: a QB with his own WR or TE on touchdowns.** That pair is
+*positively* correlated — the pass TD and the receiving TD are often the same
+play — so it is left alone. As specified, the carve-out names a WR or TE, so a
+QB paired with his own **running back** still counts as a clash.
+
+When a clash is found, the **weaker leg is dropped** and that slot re-picked
+from what the fantasy team has left. Comparing the two scores is valid because
+no rule ever pairs a gap market with an EV market — a test enforces that, since
+a +40% gap and a +40% EV are not the same claim.
+
+Three things worth knowing:
+
+- **A hand-picked leg is never displaced.** If you set an override for a slot,
+  the other leg moves instead. If *both* legs were hand-picked, neither is
+  touched and the parlay says so.
+- **Replacing a leg can cause a fresh clash**, so the pass repeats. Every swap
+  is listed under *Same-team clashes resolved* on the Parlay tab, including
+  slots that were swapped more than once.
+- **A slot can end up NONE** if the fantasy team has nothing else that
+  qualifies. That is much more likely on a thin slate, where most rostered
+  players come from a handful of games.
+
+Turn the whole thing off with **Avoid same-team clashes** under *Toggles*.
+
 ### Why you may see a lot of NONE at first
 
 The default odds floor is **-110**, but FanDuel routinely prices yardage props at
@@ -259,6 +303,7 @@ floor to **-120** and it will look much healthier.
 | EV props enabled | ON | Off = yardage props only |
 | Starters only | OFF | On = ignore bench and IR |
 | Exclude Questionable | OFF | Off = still eligible, flagged ⚠️ |
+| Avoid same-team clashes | ON | Stops two legs on one NFL offence competing for the same football; the weaker leg is replaced. See *Same-team clashes* above |
 | Stake | $10 | Display only — the app never places a bet |
 | Season year | 2026 | ESPN season |
 | ESPN league ID | 563635 | Change this in the sidebar to point at a different league — no redeploy needed |

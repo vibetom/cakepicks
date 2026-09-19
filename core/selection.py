@@ -12,6 +12,7 @@ the sliders re-run selection without touching the API.
 from __future__ import annotations
 
 from . import scoring
+from . import conflicts
 from .matching import NameMatcher
 from .odds import parse_event_props
 from .projections import projection_index, row_to_projection
@@ -244,6 +245,10 @@ def score_props(*, events, raw_by_event, teams, projections, config,
                 "player_id": player["player_id"],
                 "nfl_team": player.get("nfl_team"),
                 "position": player.get("position"),
+                # ESPN reports a default position id, which this league renders
+                # as "TQB" and "RB/WR" -- no use for telling a WR from a TE.
+                # The PFF file has a plain QB/RB/WR/TE, so carry that too.
+                "projection_position": projection.get("position"),
                 "questionable": player.get("questionable", False),
                 "match_method": roster_hit.method,
                 "match_score": roster_hit.score,
@@ -348,31 +353,72 @@ def can_approve(prop: dict) -> bool:
     return bool(codes) and codes <= APPROVABLE_CODES and prop.get("score") is not None
 
 
+def _eligible_props(candidates, approved_reviews, used_players, banned=()):
+    """Props this team could still play, in no particular order."""
+    return [
+        p for p in candidates
+        if (p["eligible"]
+            or (p["prop_id"] in approved_reviews and can_approve(p)))
+        and p.get("score") is not None
+        and p["player_key"] not in used_players
+        and p["prop_id"] not in banned
+    ]
+
+
+def _choose(eligible, config):
+    """Apply the three-tier logic (§8) to one team's eligible props.
+
+    Returns (pick, tier, best_gap, best_ev). Pulled out of select_picks so the
+    conflict pass can re-run exactly the same rule on a narrowed shortlist
+    rather than reimplementing it.
+    """
+    gap_props = [p for p in eligible if p["kind"] == "gap"]
+    ev_props = [p for p in eligible if p["kind"] == "ev"]
+    best_gap = max(gap_props, key=_sort_key) if gap_props else None
+    best_ev = max(ev_props, key=_sort_key) if ev_props else None
+
+    gap_threshold = float(config["gap_threshold"])
+    ev_threshold = float(config["ev_threshold"])
+
+    pick = tier = None
+    if best_gap is not None and best_gap["score"] >= gap_threshold:
+        pick, tier = best_gap, 1
+        if best_ev is not None and best_ev["score"] >= ev_threshold:
+            pick = best_ev                # EV override steals the slot
+    elif best_ev is not None and best_ev["score"] >= ev_threshold:
+        pick, tier = best_ev, 1
+    elif best_gap is not None:
+        pick, tier = best_gap, 2          # best available under the circumstances
+    elif best_ev is not None:
+        pick, tier = best_ev, 2
+    return pick, tier, best_gap, best_ev
+
+
 def select_picks(scored: dict, teams: list[dict], config: dict,
                  approved_reviews=None, overrides=None) -> list[dict]:
     """Choose one leg per fantasy team using the three-tier logic (§8).
 
     `approved_reviews` is a set of prop ids the user has approved past the
     sanity ceiling; `overrides` maps fantasy_team_id -> prop id chosen by hand.
+
+    Once every slot is filled, a second pass breaks up pairs of legs that share
+    an NFL team and pull against each other (see core.conflicts), replacing the
+    weaker leg of each pair.
     """
     approved_reviews = approved_reviews or set()
     overrides = overrides or {}
     results = []
     used_players: set = set()
+    candidates_by_team: dict = {}
 
     for team in teams:
         team_id = team["team_id"]
         candidates = list(scored["by_team"].get(team_id, []))
+        candidates_by_team[team_id] = candidates
         for prop in candidates:
             prop["prop_id"] = prop_id(prop)
 
-        eligible = [
-            p for p in candidates
-            if (p["eligible"]
-                or (p["prop_id"] in approved_reviews and can_approve(p)))
-            and p.get("score") is not None
-            and p["player_key"] not in used_players
-        ]
+        eligible = _eligible_props(candidates, approved_reviews, used_players)
         review_cards = [
             p for p in candidates
             if p.get("needs_review") and p["prop_id"] not in approved_reviews
@@ -390,24 +436,7 @@ def select_picks(scored: dict, teams: list[dict], config: dict,
                 tier, manual = "manual", True
 
         if pick is None:
-            gap_props = [p for p in eligible if p["kind"] == "gap"]
-            ev_props = [p for p in eligible if p["kind"] == "ev"]
-            best_gap = max(gap_props, key=_sort_key) if gap_props else None
-            best_ev = max(ev_props, key=_sort_key) if ev_props else None
-
-            gap_threshold = float(config["gap_threshold"])
-            ev_threshold = float(config["ev_threshold"])
-
-            if best_gap is not None and best_gap["score"] >= gap_threshold:
-                pick, tier = best_gap, 1
-                if best_ev is not None and best_ev["score"] >= ev_threshold:
-                    pick = best_ev            # EV override steals the slot
-            elif best_ev is not None and best_ev["score"] >= ev_threshold:
-                pick, tier = best_ev, 1
-            elif best_gap is not None:
-                pick, tier = best_gap, 2      # best available under the circumstances
-            elif best_ev is not None:
-                pick, tier = best_ev, 2
+            pick, tier, best_gap, best_ev = _choose(eligible, config)
 
         if pick is not None:
             used_players.add(pick["player_key"])
@@ -444,8 +473,121 @@ def select_picks(scored: dict, teams: list[dict], config: dict,
             "approved_past": approved_past,
             "none_reason": None if pick else _none_reason(team, candidates, config),
             "candidate_count": len(candidates),
+            # A list: one slot can be hit more than once, and overwriting the
+            # note would hide the earlier swap that led to the later one.
+            "conflict_notes": [],
         })
+
+    if config.get("avoid_team_conflicts", True):
+        _resolve_conflicts(results, candidates_by_team, config, approved_reviews)
     return results
+
+
+#: A backstop, not a working limit. Each pass permanently bans one prop from
+#: one team, so the options shrink monotonically and the loop always ends.
+MAX_CONFLICT_PASSES = 40
+
+
+def _weaker(left: dict, right: dict):
+    """Which row of a conflicting pair gives way, or None if neither can.
+
+    Comparing the two scores directly is sound because no conflict rule pairs a
+    gap market with an EV market -- core.conflicts explains why, and a test
+    pins it. A hand-picked leg is never displaced: the user said what they
+    wanted for that slot.
+    """
+    if left["manual"] and right["manual"]:
+        return None
+    if left["manual"]:
+        return right
+    if right["manual"]:
+        return left
+    left_score = left["pick"]["score"]
+    right_score = right["pick"]["score"]
+    if left_score != right_score:
+        return left if left_score < right_score else right
+    # A tie has to break the same way every run, or the parlay flaps between
+    # two equally good legs each time the page re-renders.
+    return left if left["pick"]["prop_id"] > right["pick"]["prop_id"] else right
+
+
+def _refill(row, candidates, config, approved_reviews, used_players, banned):
+    """Re-pick one slot after its leg was dropped, using the same tier logic."""
+    eligible = _eligible_props(candidates, approved_reviews, used_players, banned)
+    pick, tier, best_gap, best_ev = _choose(eligible, config)
+
+    row["pick"] = pick
+    row["tier"] = tier
+    row["approved_past"] = (
+        approval_clears(pick)
+        if pick is not None and not pick["eligible"]
+        and pick["prop_id"] in approved_reviews
+        else []
+    )
+    row["why"], row["why_detail"] = explain_pick(
+        pick, tier, False, best_gap, best_ev, config)
+    row["alternatives"] = sorted(
+        (p for p in eligible if pick is None or p["prop_id"] != pick["prop_id"]),
+        key=_sort_key, reverse=True,
+    )[:5]
+    return pick
+
+
+def _resolve_conflicts(results, candidates_by_team, config, approved_reviews):
+    """Break up pairs of legs that share an NFL team and fight each other.
+
+    The weaker leg of each pair is dropped and its slot re-picked from what
+    that fantasy team has left. Replacing a leg can create a fresh conflict, so
+    this repeats until the slate is clean.
+    """
+    banned: dict = {row["team_id"]: set() for row in results}
+    # Pairs nothing can be done about -- both legs hand-picked. Recorded so the
+    # loop reports them once and moves on instead of retrying forever.
+    accepted: set = set()
+
+    for _ in range(MAX_CONFLICT_PASSES):
+        filled = [(index, row) for index, row in enumerate(results) if row["pick"]]
+        pair = None
+        for left_i, right_i, reason in conflicts.find([r["pick"] for _, r in filled]):
+            left, right = filled[left_i][1], filled[right_i][1]
+            key = frozenset({left["pick"]["prop_id"], right["pick"]["prop_id"]})
+            if key not in accepted:
+                pair = (left, right, reason, key)
+                break
+        if pair is None:
+            return
+
+        left, right, reason, key = pair
+        loser = _weaker(left, right)
+        if loser is None:
+            accepted.add(key)
+            for row, other in ((left, right), (right, left)):
+                row["conflict_notes"].append(
+                    f"⚠️ {reason} with {other['team_name']}'s "
+                    f"{conflicts.describe(other['pick'])} on "
+                    f"{row['pick']['nfl_team']} — both were chosen by hand, so "
+                    "neither was replaced."
+                )
+            continue
+
+        winner = right if loser is left else left
+        dropped = loser["pick"]
+        banned[loser["team_id"]].add(dropped["prop_id"])
+        used = {row["pick"]["player_key"] for row in results
+                if row["pick"] and row is not loser}
+
+        replacement = _refill(loser, candidates_by_team[loser["team_id"]], config,
+                              approved_reviews, used, banned[loser["team_id"]])
+        loser["conflict_notes"].append(
+            f"{conflicts.describe(dropped)} ({dropped['score']:+.1%}) was dropped: "
+            f"{reason} with {winner['team_name']}'s "
+            f"{conflicts.describe(winner['pick'])} on {dropped['nfl_team']}."
+        )
+        if replacement is None:
+            loser["none_reason"] = (
+                f"{reason} with {winner['team_name']} on {dropped['nfl_team']}, "
+                "and nothing else on this roster qualifies."
+            )
 
 
 def _label(prop: dict) -> str:

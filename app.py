@@ -311,6 +311,13 @@ def render_sidebar() -> dict:
                  "flagged ⚠️.")
         new["exclude_doubtful"] = st.toggle(
             "Exclude Doubtful", value=bool(config["exclude_doubtful"]))
+        new["avoid_team_conflicts"] = st.toggle(
+            "Avoid same-team clashes", value=bool(config.get("avoid_team_conflicts", True)),
+            help="Stops two legs on one NFL offence competing for the same "
+                 "football — two receivers needing the same catches, or a QB's "
+                 "passing yards against his own back's carries. The weaker leg "
+                 "of each clash is replaced. A QB with his own WR or TE on "
+                 "touchdowns is left alone: that pair helps each other.")
 
     with st.sidebar.expander("Misc", expanded=False):
         new["stake"] = st.number_input(
@@ -893,6 +900,10 @@ with tab_parlay:
         # filter looks like it stopped working.
         if row.get("approved_past"):
             flags.append(f"✋ approved past {len(row['approved_past'])}")
+        # A leg swapped out by the same-team rule has to say so, or the pick
+        # looks like it changed for no reason.
+        if row.get("conflict_notes"):
+            flags.append("🔀 same-team swap")
         rows.append({
             "Team": row["team_name"],
             "Player": (prop.get("player_name_espn") or prop.get("player_name")) if prop else "—",
@@ -908,6 +919,25 @@ with tab_parlay:
         pd.DataFrame(rows), width="stretch", hide_index=True,
         column_config={"Betslip": st.column_config.LinkColumn("Betslip", display_text="Add to slip")},
     )
+
+    swaps = [row for row in picks if row.get("conflict_notes")]
+    if swaps:
+        with st.expander(f"🔀 Same-team clashes resolved ({len(swaps)})", expanded=False):
+            st.caption(
+                "Two legs on one NFL offence can compete for the same football. "
+                "Where that happened the weaker leg was replaced — this is what "
+                "changed and why. Turn it off under **Toggles** in the sidebar."
+            )
+            for row in swaps:
+                st.markdown(f"**{row['team_name']}**")
+                for note in row["conflict_notes"]:
+                    st.markdown(f"- {note}")
+                if row.get("pick"):
+                    st.caption(
+                        "Now playing "
+                        f"{parlay_mod.describe_prop(row['pick'])} "
+                        f"({parlay_mod.score_text(row['pick'])})."
+                    )
 
     st.subheader("Parlay summary")
     metrics = st.columns(4)

@@ -43,6 +43,9 @@ DEFAULTS = {
     "starters_only": False,
     "exclude_questionable": False,
     "exclude_doubtful": True,
+    # Stops two legs on one NFL offence competing for the same football; see
+    # core.conflicts for the pairs it rules out.
+    "avoid_team_conflicts": True,
     # Misc
     "stake": 10.0,
     "season_year": 2026,
