@@ -6,6 +6,7 @@ from core.odds import playing_team_codes
 from core.parlay import combine
 from core.rosters import filter_players
 from core import scoring
+from core import selection
 from core.selection import prop_id, score_props, select_picks
 
 
@@ -196,20 +197,53 @@ class TestSanityCeiling:
                                                   league, aliases):
         """A prop blocked by the price floor stays blocked even when approved.
 
-        Approving a sanity flag must re-admit only props whose *sole* problem
-        was the flag, otherwise one click could smuggle in a juiced prop.
+        The floor is the guard against taking a juiced price, and unlike the
+        odds ceiling no override clears it.
+
+        The floor is +300 rather than +200 on purpose: the fixture's only
+        flagged prop is priced at +250, so a +200 floor left this test passing
+        without ever exercising its own claim.
         """
         tight = dict(config)
-        tight["odds_floor"] = 200          # excludes everything priced under +200
+        tight["odds_floor"] = 300          # the flagged +250 prop is below it
         teams = filter_players(league, playing_team_codes(events))
         scored = score_props(events=events, raw_by_event=raw_by_event, teams=teams,
                              projections=projections, config=tight, aliases=aliases)
         flagged = {prop_id(p) for props in scored["by_team"].values()
                    for p in props if p.get("needs_review")}
+        assert flagged, "fixture no longer produces a flagged prop below the floor"
         picks = select_picks(scored, teams, tight, approved_reviews=flagged)
         for row in picks:
             if row["pick"]:
-                assert scoring.price_meets_floor(row["pick"]["price"], 200)
+                assert scoring.price_meets_floor(row["pick"]["price"], 300)
+
+    def test_approving_clears_the_odds_ceiling(self, config, events, raw_by_event,
+                                               projections, league, aliases):
+        """The reported bug: a longshot trips the ceiling and the sanity flag.
+
+        Approving it used to do nothing, because the gate only re-admitted
+        props the sanity flag alone had blocked.
+        """
+        tight = {**config, "odds_ceiling": 200}      # the flagged prop is +250
+        teams = filter_players(league, playing_team_codes(events))
+        scored = score_props(events=events, raw_by_event=raw_by_event, teams=teams,
+                             projections=projections, config=tight, aliases=aliases)
+        row = next(r for r in select_picks(scored, teams, tight)
+                   if r["review_cards"])
+        card = row["review_cards"][0]
+        assert set(card["exclusion_codes"]) == {"price_ceiling", "sanity_ceiling"}
+
+        after = next(r for r in select_picks(scored, teams, tight,
+                                             approved_reviews={card["prop_id"]})
+                     if r["team_id"] == row["team_id"])
+        assert after["pick"]["prop_id"] == card["prop_id"]
+        assert after["approved_past"] == ["price_ceiling"]
+
+    def test_an_ordinary_pick_is_not_marked_as_approved_past_anything(
+            self, run, config):
+        for row in run(config)["picks"]:
+            if row["pick"]:
+                assert row["approved_past"] == []
 
 
 class TestPlayerUniqueness:
@@ -459,3 +493,65 @@ class TestPickRationale:
                 if row["pick"]:
                     assert row["why"] and row["why"] != "—"
                     assert row["why_detail"]
+
+
+class TestApprovingAReviewCard:
+    """The "use this leg" button, and the reason it used to do nothing.
+
+    A long price with a big modelled edge trips the odds ceiling *and* the
+    sanity ceiling. The old gate only cleared props blocked by the sanity flag
+    alone, so on exactly the props most likely to be flagged, approving them
+    changed nothing and said nothing.
+    """
+
+    @staticmethod
+    def longshot_td(price=450, ceiling=300):
+        from core.config import DEFAULTS
+
+        config = {**DEFAULTS, "odds_ceiling": ceiling}
+        prop = {"market": "player_anytime_td", "price": price, "line": None,
+                "player_name": "DeVaughn Vele", "market_label": "Anytime TD",
+                "event_id": "e1"}
+        projection = {"rushTd": 0.02, "recvTd": 0.55, "returnTd": 0.0,
+                      "playerName": "DeVaughn Vele", "team": "NO"}
+        return selection.score_prop(prop, projection, config), config
+
+    def test_the_flagged_longshot_trips_both_filters(self):
+        scored, _ = self.longshot_td()
+        assert scored["needs_review"]
+        assert set(scored["exclusion_codes"]) == {"price_ceiling", "sanity_ceiling"}
+        assert not scored["review_only"]        # why the old gate refused it
+
+    def test_approving_it_is_now_possible(self):
+        scored, _ = self.longshot_td()
+        assert selection.can_approve(scored)
+
+    def test_approval_names_what_else_it_overrides(self):
+        scored, _ = self.longshot_td()
+        assert selection.approval_clears(scored) == ["price_ceiling"]
+
+    def test_a_card_blocked_only_by_the_sanity_flag_overrides_nothing_extra(self):
+        scored, _ = self.longshot_td(price=250, ceiling=300)
+        assert scored["needs_review"]
+        assert selection.approval_clears(scored) == []
+        assert selection.can_approve(scored)
+
+    def test_the_human_text_for_each_block_survives(self):
+        scored, _ = self.longshot_td()
+        detail = scored["exclusion_details"]["price_ceiling"]
+        assert "+450" in detail and "+300" in detail
+
+    def test_an_unscorable_prop_cannot_be_approved(self):
+        """Nothing to overrule: it has no score to rank."""
+        assert not selection.can_approve(
+            {"exclusion_codes": ["no_line", "unscored"], "score": None})
+
+    def test_an_eligible_prop_needs_no_approval(self):
+        assert not selection.can_approve({"exclusion_codes": [], "score": 0.2})
+
+    def test_approvable_codes_are_all_user_settings(self):
+        """Anything here must be a knob the user can reasonably overrule."""
+        from core.board import BLOCKING_LABELS
+
+        for code in selection.APPROVABLE_CODES:
+            assert code in BLOCKING_LABELS

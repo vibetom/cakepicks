@@ -75,6 +75,7 @@ def score_prop(prop: dict, projection: dict, config: dict) -> dict:
             "kind": "invalid", "score": None, "needs_review": False,
             "eligible": False, "review_only": False,
             "exclusion_codes": ["bad_price"],
+            "exclusion_details": {"bad_price": f"invalid price {prop['price']}"},
             "exclusion_reason": f"invalid price {prop['price']}",
         })
         return out
@@ -144,6 +145,10 @@ def score_prop(prop: dict, projection: dict, config: dict) -> dict:
     # price floor or a volume floor.
     out["review_only"] = codes == ["sanity_ceiling"]
     out["exclusion_codes"] = codes
+    # Kept per-code as well as joined: a review card needs to name the blocks
+    # other than the sanity flag, and splitting the joined string back apart
+    # would be guesswork.
+    out["exclusion_details"] = {code: text for code, text in reasons}
     out["exclusion_reason"] = "; ".join(text for _, text in reasons) or None
     return out
 
@@ -302,6 +307,47 @@ class _neg_alpha:
         return self.value == other.value
 
 
+#: Blocks that an informed approval is allowed to clear.
+#:
+#: Approving a review card used to clear nothing but the sanity flag, so the
+#: button did nothing at all whenever a long-priced prop tripped the odds
+#: ceiling too -- which is the common case, not an edge case: a big modelled
+#: edge on a longshot is precisely what both filters catch at once.
+#:
+#: The odds ceiling is a blanket rule ("nothing longer than +300") and a
+#: per-leg exception is exactly what an override is for -- raising the ceiling
+#: instead would let every other longshot back in.
+#:
+#: Everything else stays blocking, for three different reasons:
+#:
+#: * `price_floor` -- deliberately asymmetric with the ceiling. Nobody has
+#:   asked to overrule it, and it is the guard against taking a juiced price.
+#: * `volume_floor` -- not a preference but a validity limit. PFF projections
+#:   are means of right-skewed distributions, so a low-volume player's over is
+#:   flattered; the edge on the card may be an artifact of the very thing the
+#:   click would bypass.
+#: * `market_off`, `ev_off`, and the unscorable codes -- there is nothing to
+#:   overrule. The remedy is a checkbox, or the prop cannot be ranked at all.
+APPROVABLE_CODES = frozenset({"sanity_ceiling", "price_ceiling"})
+
+
+def approval_clears(prop: dict) -> list[str]:
+    """What approving this prop would override, beyond the sanity flag.
+
+    Empty when the sanity flag is the only thing blocking it. The UI shows this
+    so that "use this leg anyway" names what it is bypassing rather than
+    quietly widening a filter the user set on purpose.
+    """
+    codes = [c for c in (prop.get("exclusion_codes") or []) if c != "sanity_ceiling"]
+    return sorted(set(codes))
+
+
+def can_approve(prop: dict) -> bool:
+    """Whether approving this prop could actually put it in the parlay."""
+    codes = set(prop.get("exclusion_codes") or [])
+    return bool(codes) and codes <= APPROVABLE_CODES and prop.get("score") is not None
+
+
 def select_picks(scored: dict, teams: list[dict], config: dict,
                  approved_reviews=None, overrides=None) -> list[dict]:
     """Choose one leg per fantasy team using the three-tier logic (§8).
@@ -322,7 +368,8 @@ def select_picks(scored: dict, teams: list[dict], config: dict,
 
         eligible = [
             p for p in candidates
-            if (p["eligible"] or (p.get("review_only") and p["prop_id"] in approved_reviews))
+            if (p["eligible"]
+                or (p["prop_id"] in approved_reviews and can_approve(p)))
             and p.get("score") is not None
             and p["player_key"] not in used_players
         ]
@@ -365,6 +412,16 @@ def select_picks(scored: dict, teams: list[dict], config: dict,
         if pick is not None:
             used_players.add(pick["player_key"])
 
+        # A leg that only got in because the user approved it past a filter has
+        # to say so wherever it appears, or the filter looks like it silently
+        # stopped working the next time they read the parlay.
+        approved_past = (
+            approval_clears(pick)
+            if pick is not None and not pick["eligible"]
+            and pick["prop_id"] in approved_reviews
+            else []
+        )
+
         why_short, why_detail = explain_pick(
             pick, tier, manual, best_gap, best_ev, config)
 
@@ -384,6 +441,7 @@ def select_picks(scored: dict, teams: list[dict], config: dict,
             "why": why_short,
             "why_detail": why_detail,
             "review_cards": review_cards,
+            "approved_past": approved_past,
             "none_reason": None if pick else _none_reason(team, candidates, config),
             "candidate_count": len(candidates),
         })

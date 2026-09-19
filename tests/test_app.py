@@ -1016,3 +1016,71 @@ class TestOddsCeilingControl:
         assert_no_exceptions(app)
         errors = " ".join(e.value for e in app.sidebar.error)
         assert "shorter than the floor" in errors
+
+
+class TestApprovingAFlaggedLongshot:
+    """The reported bug, driven through the UI: click the button, see the leg.
+
+    A long-priced prop with a big modelled edge trips the odds ceiling and the
+    sanity ceiling together. Approving it used to change nothing on the page
+    and say nothing about why.
+    """
+
+    @pytest.fixture
+    def loaded(self, monkeypatch, events, raw_by_event, league, projections, config):
+        monkeypatch.setenv("ODDS_API_KEY", "test-key")
+        return dict(
+            # The fixture's flagged prop is +250, so this puts it past the
+            # ceiling as well as the sanity flag -- the Vele shape.
+            config={**config, "odds_ceiling": 200},
+            events=events, raw_by_event=raw_by_event, teams_raw=league,
+            projections=projections, projection_filename="week-2.csv",
+            projection_warnings=[],
+            odds_fetched_at="2026-09-10T18:00:00+00:00",
+            roster_fetched_at="2026-09-10T18:00:00+00:00",
+            overrides={}, approved_reviews=set(),
+            quota={"remaining": 430, "used": 70, "last_cost": 14},
+        )
+
+    def approve_button(self, app):
+        return next((b for b in app.button if "anyway" in b.label.lower()), None)
+
+    def test_the_button_says_what_else_it_overrides(self, loaded):
+        app = run_app(**loaded)
+        assert_no_exceptions(app)
+        button = self.approve_button(app)
+        assert button is not None, [b.label for b in app.button]
+        assert "1 other filter" in button.label
+
+    def test_the_card_names_the_other_block(self, loaded):
+        app = run_app(**loaded)
+        warnings = " ".join(w.value for w in app.warning)
+        assert "isn't the only thing holding this back" in warnings
+        assert "ceiling" in warnings
+
+    def test_clicking_it_actually_inserts_the_leg(self, loaded):
+        """The whole bug in one assertion."""
+        app = run_app(**loaded)
+        self.approve_button(app).click().run()
+        assert_no_exceptions(app)
+        assert app.session_state.approved_reviews, "approval was not recorded"
+
+        table = next(d.value for d in app.dataframe if "Team" in d.value.columns)
+        assert any("approved past" in str(flag)
+                   for flag in table["Flags / reason"]), table["Flags / reason"].tolist()
+
+    def test_the_approved_leg_is_the_flagged_one(self, loaded):
+        app = run_app(**loaded)
+        self.approve_button(app).click().run()
+        table = next(d.value for d in app.dataframe if "Team" in d.value.columns)
+        row = table[table["Flags / reason"].str.contains("approved past", na=False)]
+        assert len(row) == 1
+        assert row.iloc[0]["Player"] == "Josh Jacobs"
+        assert row.iloc[0]["FanDuel"] == "+250"
+
+    def test_without_approval_the_longshot_stays_out(self, loaded):
+        app = run_app(**loaded)
+        table = next(d.value for d in app.dataframe if "Team" in d.value.columns)
+        assert not any("approved past" in str(f) for f in table["Flags / reason"])
+        assert "Josh Jacobs" not in table["Player"].tolist() or \
+            "+250" not in table["FanDuel"].tolist()

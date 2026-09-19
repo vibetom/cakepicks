@@ -26,6 +26,7 @@ from core.matching import AliasStore, RejectionStore
 from core.store import build_store
 from core.projections import ProjectionError, load_projections
 from core.rosters import RosterError, fetch_league, filter_players, league_url
+from core import selection
 from core.selection import score_props, select_picks
 
 load_dotenv()
@@ -710,8 +711,31 @@ def render_review_card(row: dict, card: dict) -> None:
                 "least* once. The real edge is a bit smaller than shown."
             )
 
-        if st.button(f"Use this leg for {row['team_name']}",
-                     key=f"approve-{card['prop_id']}"):
+        # The sanity flag is rarely the only thing blocking a card like this: a
+        # long price with a big modelled edge trips the odds ceiling as well,
+        # and the button used to do nothing at all in that case. Name the other
+        # blocks, and make the button say what it is about to override.
+        also_blocked = selection.approval_clears(card)
+        details = card.get("exclusion_details") or {}
+        if also_blocked:
+            st.warning(
+                "**The sanity flag isn't the only thing holding this back.** "
+                "Using it overrides " + ("these too" if len(also_blocked) > 1
+                                         else "this too") + ":\n"
+                + "\n".join(f"- {details.get(code, code)}" for code in also_blocked)
+            )
+
+        if not selection.can_approve(card):
+            st.error(
+                "This prop can't be used: " + (card.get("exclusion_reason") or "—")
+            )
+        elif st.button(
+            f"Use this leg for {row['team_name']}" if not also_blocked
+            else f"Use it anyway for {row['team_name']} — overrides "
+                 f"{len(also_blocked)} other filter"
+                 f"{'s' if len(also_blocked) > 1 else ''}",
+            key=f"approve-{card['prop_id']}",
+        ):
             st.session_state.approved_reviews.add(card["prop_id"])
             st.rerun()
 
@@ -865,6 +889,10 @@ with tab_parlay:
             flags.append("⚠️ Q")
         if row.get("review_cards"):
             flags.append(f"🚩 {len(row['review_cards'])}")
+        # A leg the user waved past a filter must keep saying so here, or the
+        # filter looks like it stopped working.
+        if row.get("approved_past"):
+            flags.append(f"✋ approved past {len(row['approved_past'])}")
         rows.append({
             "Team": row["team_name"],
             "Player": (prop.get("player_name_espn") or prop.get("player_name")) if prop else "—",
