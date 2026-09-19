@@ -252,6 +252,7 @@ These pairs are now ruled out when both legs are on **the same NFL team**:
 | two passing-yards legs | one quarterback's production |
 | passing yards + rushing yards | the offence can only lean one way |
 | passing yards + rush attempts | same |
+| receiving yards + receptions | same targets |
 | two touchdown legs | same trips to the end zone |
 
 **One exception: a QB with his own WR or TE on touchdowns.** That pair is
@@ -260,9 +261,16 @@ play — so it is left alone. As specified, the carve-out names a WR or TE, so a
 QB paired with his own **running back** still counts as a clash.
 
 When a clash is found, the **weaker leg is dropped** and that slot re-picked
-from what the fantasy team has left. Comparing the two scores is valid because
-no rule ever pairs a gap market with an EV market — a test enforces that, since
-a +40% gap and a +40% EV are not the same claim.
+from what the fantasy team has left.
+
+For most pairs "weaker" just means the lower score, because both legs are
+scored the same way. **Receiving yards + receptions is the exception**: yards
+are scored by gap and receptions by EV, and a +30% gap is not a +15% EV. There,
+the app asks the *same tier logic that fills a slot* which leg it would rather
+have — so a qualifying EV prop beats a qualifying gap prop (your EV override
+threshold), and below both thresholds the gap prop is preferred. The upshot is
+that the clash rule can never disagree with the slot rule: if those two props
+sat on one roster, the same one would survive.
 
 Three things worth knowing:
 

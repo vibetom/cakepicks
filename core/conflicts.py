@@ -12,12 +12,16 @@ team could have played instead.
 
 Two things worth knowing about the rules below:
 
-**Both legs of every pair are always scored the same way.** Yardage and rush
-attempts are gap markets; receptions and touchdowns are EV markets; no rule
-crosses between them. That matters, because "the weaker one gets replaced"
-would be meaningless otherwise -- a +40% gap and a +40% EV are not comparable
-quantities, and this codebase never ranks one against the other. A test pins
-this property so a future rule cannot quietly break it.
+**Most pairs are same-kind, and one is not.** Yardage and rush attempts are gap
+markets; receptions and touchdowns are EV markets. Every rule here stays inside
+one of those groups except receiving yards against receptions, which spans
+both. That distinction matters because "the weaker one gets replaced" needs the
+two scores to mean the same thing, and a +40% gap is not a +40% EV -- this
+codebase never ranks one against the other with a plain comparison. For the
+crossing rule, selection._weaker defers to the tier logic that fills a slot in
+the first place, so the clash rule and the slot rule cannot disagree. A test
+lists which rules cross, so adding another is a deliberate act rather than an
+accident.
 
 **Position comes from the projections file, not the ESPN roster.** ESPN reports
 a *default position id* that this league renders as "TQB" and "RB/WR", which
@@ -49,6 +53,10 @@ MARKET_CONFLICTS = {
     frozenset({PASS_YDS}): "two passing-yards legs",
     frozenset({PASS_YDS, RUSH_YDS}): "passing yards against rushing yards",
     frozenset({PASS_YDS, RUSH_ATT}): "passing yards against rush attempts",
+    # The one rule that crosses scoring kinds: receiving yards are scored by
+    # gap, receptions by EV. selection._weaker explains how the weaker leg is
+    # picked when the two scores are not comparable quantities.
+    frozenset({REC_YDS, RECEPTIONS}): "receiving yards against receptions",
 }
 
 #: The touchdown exception: a quarterback and a player he throws to are

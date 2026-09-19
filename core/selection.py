@@ -488,13 +488,25 @@ def select_picks(scored: dict, teams: list[dict], config: dict,
 MAX_CONFLICT_PASSES = 40
 
 
-def _weaker(left: dict, right: dict):
+def _weaker(left: dict, right: dict, config: dict):
     """Which row of a conflicting pair gives way, or None if neither can.
 
-    Comparing the two scores directly is sound because no conflict rule pairs a
-    gap market with an EV market -- core.conflicts explains why, and a test
-    pins it. A hand-picked leg is never displaced: the user said what they
-    wanted for that slot.
+    A hand-picked leg is never displaced: the user said what they wanted for
+    that slot.
+
+    Otherwise this asks `_choose` -- the same tier logic that fills a slot in
+    the first place -- which of the two it would rather have, and the other one
+    goes. Reusing it matters most where the pair crosses scoring kinds, as
+    receiving yards against receptions does: a +18% gap and a +22% EV are not
+    comparable quantities, so a plain `<` between the scores would be
+    meaningless. The tier logic already has a considered answer there (a
+    qualifying EV prop takes the slot from a qualifying gap prop; below the
+    thresholds the gap prop is preferred), and one rule the user has already
+    tuned beats a second one invented here that could contradict it.
+
+    For a same-kind pair this reduces to "the higher score wins", via the same
+    `_sort_key` used everywhere else -- which breaks ties on price and then
+    name, so the result is stable across reruns.
     """
     if left["manual"] and right["manual"]:
         return None
@@ -502,13 +514,11 @@ def _weaker(left: dict, right: dict):
         return right
     if right["manual"]:
         return left
-    left_score = left["pick"]["score"]
-    right_score = right["pick"]["score"]
-    if left_score != right_score:
-        return left if left_score < right_score else right
-    # A tie has to break the same way every run, or the parlay flaps between
-    # two equally good legs each time the page re-renders.
-    return left if left["pick"]["prop_id"] > right["pick"]["prop_id"] else right
+
+    winner, *_ = _choose([left["pick"], right["pick"]], config)
+    if winner is None:                       # unreachable: both legs are scored
+        return right
+    return right if winner is left["pick"] else left
 
 
 def _refill(row, candidates, config, approved_reviews, used_players, banned):
@@ -558,7 +568,7 @@ def _resolve_conflicts(results, candidates_by_team, config, approved_reviews):
             return
 
         left, right, reason, key = pair
-        loser = _weaker(left, right)
+        loser = _weaker(left, right, config)
         if loser is None:
             accepted.add(key)
             for row, other in ((left, right), (right, left)):

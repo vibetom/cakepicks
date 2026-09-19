@@ -12,17 +12,31 @@ def leg(market, team="CIN", position="WR", score=0.20, player="A Player",
             "player_key": key or player, "prop_id": f"{player}-{market}"}
 
 
+#: Rules whose two markets are scored differently. Such a pair cannot be
+#: resolved by comparing scores, so selection._weaker defers to the tier logic.
+CROSSING = {frozenset({"player_reception_yds", "player_receptions"})}
+
+
 class TestScoresStayComparable:
     """The rule "the weaker one is replaced" has to mean something.
 
-    A +40% gap and a +40% EV are not the same claim and this codebase never
-    ranks one against the other. That is safe here only because no conflict
-    rule pairs a gap market with an EV market. If one ever does, the
-    replacement logic starts comparing incomparable numbers, so pin it.
+    A +40% gap and a +40% EV are not the same claim, and this codebase never
+    ranks one against the other with a plain comparison. Most rules stay inside
+    one scoring kind, so their scores are directly comparable. The ones that do
+    not are listed here deliberately: adding another should be a decision, not
+    something that slips in because the test only checked a general property.
     """
 
-    def test_no_rule_mixes_a_gap_market_with_an_ev_market(self):
+    def test_exactly_the_known_rules_cross_between_gap_and_ev(self):
+        crossing = {markets for markets in conflicts.MARKET_CONFLICTS
+                    if not (markets <= scoring.GAP_MARKETS
+                            or markets <= scoring.EV_MARKETS)}
+        assert crossing == CROSSING
+
+    def test_every_other_rule_is_directly_comparable(self):
         for markets in conflicts.MARKET_CONFLICTS:
+            if markets in CROSSING:
+                continue
             assert markets <= scoring.GAP_MARKETS or markets <= scoring.EV_MARKETS, markets
 
     def test_the_touchdown_rule_is_ev_only(self):
@@ -75,7 +89,6 @@ class TestTheListedPairs:
 
     @pytest.mark.parametrize("pair", [
         ("player_reception_yds", "player_rush_yds"),
-        ("player_reception_yds", "player_receptions"),
         ("player_reception_yds", "player_anytime_td"),
         ("player_rush_yds", "player_rush_attempts"),
         ("player_rush_yds", "player_receptions"),
@@ -357,15 +370,123 @@ class TestResolutionThroughSelectPicks:
         """Overwriting would hide the swap that caused the second one."""
         scored, teams = slate(
             [prop("player_reception_yds", score=0.40, player="Chase")],
-            [prop("player_receptions", score=0.30, player="Higgins", line=4.5)],
+            [prop("player_rush_yds", score=0.30, player="Mixon")],
             [prop("player_reception_yds", score=0.20, player="Iosivas"),
-             prop("player_receptions", score=0.15, player="Jones", line=2.5),
+             prop("player_rush_yds", score=0.15, player="Brown"),
              prop("player_rush_yds", team="NE", score=0.06, player="Gainwell")],
         )
         picks = select_picks(scored, teams, config)
         third = picks[2]
         assert third["pick"]["player_name"] == "Gainwell"
         assert len(third["conflict_notes"]) == 2
-        both = " ".join(third["conflict_notes"])
-        assert "two receptions legs" in both      # the EV override's pick went first
-        assert "two receiving-yards legs" in both
+        assert "two receiving-yards legs" in third["conflict_notes"][0]
+        assert "two rushing-yards legs" in third["conflict_notes"][1]
+
+
+class TestReceivingYardsAgainstReceptions:
+    """The one rule that spans both scoring kinds.
+
+    Receiving yards are scored by gap, receptions by EV, so the two legs of
+    this clash carry numbers that do not mean the same thing. Resolution
+    defers to the tier logic rather than comparing them.
+    """
+
+    def test_the_pair_clashes_on_one_team(self):
+        assert conflicts.conflict(
+            leg("player_reception_yds", player="Chase"),
+            leg("player_receptions", player="Higgins"),
+        ) == "receiving yards against receptions"
+
+    def test_it_is_direction_agnostic(self):
+        assert conflicts.conflict(
+            leg("player_receptions", player="Higgins"),
+            leg("player_reception_yds", player="Chase"),
+        ) == "receiving yards against receptions"
+
+    def test_different_teams_are_still_fine(self):
+        assert conflicts.conflict(
+            leg("player_reception_yds", team="CIN", player="Chase"),
+            leg("player_receptions", team="NE", player="Boutte"),
+        ) is None
+
+    def test_the_same_player_is_still_left_to_the_other_guard(self):
+        """Chase's yards and Chase's catches agree; they do not compete."""
+        one = leg("player_reception_yds", player="Chase", key="chase")
+        two = leg("player_receptions", player="Chase", key="chase")
+        assert conflicts.conflict(one, two) is None
+
+
+class TestCrossKindResolution:
+    """Which leg gives way when the two scores are not comparable.
+
+    Delegated to the tier logic, so the clash rule and the slot rule can never
+    disagree: a qualifying EV prop beats a qualifying gap prop (the EV
+    override), and below the thresholds the gap prop is preferred.
+    """
+
+    @staticmethod
+    def two_team_slate(gap_score, ev_score, spare=True):
+        spares = [prop("player_rush_yds", team="NE", score=0.02, player="Spare")]
+        return slate(
+            [prop("player_reception_yds", score=gap_score, player="Chase")]
+            + (spares if spare else []),
+            [prop("player_receptions", score=ev_score, player="Higgins", line=4.5)],
+        )
+
+    def test_a_qualifying_ev_leg_beats_a_qualifying_gap_leg(self, config):
+        """Even though the gap number is the bigger of the two.
+
+        +30% gap against +15% EV: the EV override says the EV prop takes the
+        slot, so the same precedence decides the clash.
+        """
+        picks = select_picks(*self.two_team_slate(0.30, 0.15), config)
+        assert picks[1]["pick"]["player_name"] == "Higgins"   # EV kept
+        assert picks[0]["pick"]["player_name"] == "Spare"     # gap gave way
+
+    def test_below_the_thresholds_the_gap_leg_is_preferred(self, config):
+        """Mirror image: neither clears, and tier 2 favours the gap prop."""
+        picks = select_picks(*self.two_team_slate(0.03, 0.04), config)
+        assert picks[0]["pick"]["player_name"] == "Chase"     # gap kept
+        assert picks[1]["pick"] is None                       # EV gave way
+
+    def test_the_leg_that_clears_its_own_threshold_wins(self, config):
+        """A +20% gap that qualifies beats a +6% EV that does not."""
+        picks = select_picks(*self.two_team_slate(0.20, 0.06), config)
+        assert picks[0]["pick"]["player_name"] == "Chase"
+        assert picks[1]["pick"] is None
+
+    def test_it_agrees_with_what_one_roster_would_have_chosen(self, config):
+        """The real guarantee: same two props, same winner, either route.
+
+        If these sat on one fantasy roster the tier logic would pick one. The
+        clash rule must not pick the other.
+        """
+        from core.selection import _choose, prop_id
+
+        for gap_score, ev_score in ((0.30, 0.15), (0.03, 0.04), (0.20, 0.06),
+                                    (0.40, 0.90), (0.06, 0.11)):
+            gap = prop("player_reception_yds", score=gap_score, player="Chase")
+            ev = prop("player_receptions", score=ev_score, player="Higgins",
+                      line=4.5)
+            for candidate in (gap, ev):
+                candidate["prop_id"] = prop_id(candidate)
+            one_roster, _, _, _ = _choose([gap, ev], config)
+
+            scored, teams = slate([gap, prop("player_rush_yds", team="NE",
+                                             score=0.02, player="Spare")], [ev])
+            picks = select_picks(scored, teams, config)
+            survived = {r["pick"]["player_name"] for r in picks if r["pick"]}
+            assert one_roster["player_name"] in survived, (gap_score, ev_score)
+
+    def test_a_hand_picked_leg_still_wins_a_cross_kind_clash(self, config):
+        from core.selection import prop_id
+
+        gap = prop("player_reception_yds", score=0.03, player="Chase")
+        scored, teams = slate(
+            [gap],
+            [prop("player_receptions", score=0.50, player="Higgins", line=4.5),
+             prop("player_rush_yds", team="NE", score=0.02, player="Spare")],
+        )
+        picks = select_picks(scored, teams, config, overrides={1: prop_id(gap)})
+        assert picks[0]["pick"]["player_name"] == "Chase"
+        assert picks[1]["pick"]["player_name"] == "Spare"
