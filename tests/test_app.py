@@ -1084,3 +1084,4 @@ class TestApprovingAFlaggedLongshot:
         assert not any("approved past" in str(f) for f in table["Flags / reason"])
         assert "Josh Jacobs" not in table["Player"].tolist() or \
             "+250" not in table["FanDuel"].tolist()
+

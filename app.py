@@ -876,6 +876,19 @@ if absent:
             "of these props for this slate yet. Refetch closer to game day."
         )
 
+def set_override(team_id, widget_key):
+    """Record an override choice before the script reruns.
+
+    See the comment at the selectbox: this is what makes the parlay and its
+    FanDuel link reflect the override on the same click.
+    """
+    choice = st.session_state.get(widget_key, "__auto__")
+    if choice == "__auto__":
+        st.session_state.overrides.pop(team_id, None)
+    else:
+        st.session_state.overrides[team_id] = choice
+
+
 tab_parlay, tab_review, tab_diag, tab_history = st.tabs(
     ["Parlay", "Review & overrides", "Diagnostics", "History"]
 )
@@ -891,7 +904,10 @@ with tab_parlay:
         prop = row.get("pick")
         flags = []
         if row.get("manual"):
-            flags.append("manual")
+            # An override ignores the filters by design; say so, so a leg that
+            # breaks one doesn't look like the filter stopped working.
+            flags.append("✋ manual" + ("" if prop is None or prop.get("eligible")
+                                        else " (past filters)"))
         if prop and prop.get("questionable"):
             flags.append("⚠️ Q")
         if row.get("review_cards"):
@@ -1048,65 +1064,72 @@ with tab_review:
 
     st.subheader("Override a pick")
     st.caption(
-        "Every prop on each roster that passed the filters — not just the top "
-        "few. A leg the same-team rule dropped stays on this list: choosing it "
-        "by hand overrules that rule."
+        "Every prop on each roster, **including the ones the filters rejected**. "
+        "An override goes on the slip no matter what: odds floor or ceiling, "
+        "volume floors, the sanity ceiling, unticked markets, the same-team "
+        "rule, and the Doubtful / Questionable / Starters-only toggles are all "
+        "ignored for a leg you choose here. Each blocked prop says what it is "
+        "overruling. Players who are OUT, or whose team has no game in the "
+        "window, can't be offered — there is nothing to bet on."
     )
     for row in picks:
         current = row.get("pick")
         header = (f"{row['team_name']} — "
                   + (f"{current.get('player_name_espn')} {parlay_mod.describe_prop(current)}"
-                     if current else "NONE"))
+                     if current else "NONE")
+                  + ("  ✋" if row.get("manual") else ""))
         with st.expander(header):
             if row.get("none_reason"):
                 st.warning(row["none_reason"])
             elif row.get("why_detail"):
                 st.info(row["why_detail"])
-            options = [("__auto__", "Automatic pick")]
+
             dropped = set(row.get("conflict_dropped") or [])
-            for alt in row["alternatives"]:
+            approved = st.session_state.approved_reviews
+            options = [("__auto__", "Automatic pick")]
+            if current and row.get("manual"):
+                options.append((current["prop_id"],
+                                f"✋ {current.get('player_name_espn')} · "
+                                f"{parlay_mod.describe_prop(current)} · "
+                                f"{scoring.format_american(current['price'])} (your override)"))
+            for alt in row["override_options"]:
                 label = (
                     f"{alt.get('player_name_espn')} · {parlay_mod.describe_prop(alt)} · "
                     f"{scoring.format_american(alt['price'])} · {parlay_mod.score_text(alt)}"
                 )
-                if alt["prop_id"] in dropped:
-                    label += "  🔀 dropped by the same-team rule"
-                options.append((alt["prop_id"], label))
-            if current and row.get("manual"):
-                options.insert(1, (current["prop_id"],
-                                   f"(current) {current.get('player_name_espn')} · "
-                                   f"{parlay_mod.describe_prop(current)}"))
-            selected = st.session_state.overrides.get(row["team_id"], "__auto__")
+                note = selection.override_note(alt, dropped, approved)
+                options.append((alt["prop_id"], f"{label}  {note}" if note else label))
+
             keys = [key for key, _ in options]
+            widget_key = f"override-pick-{row['team_id']}"
+            selected = st.session_state.overrides.get(row["team_id"], "__auto__")
+            # Keep the widget honest if the stored override has gone (odds were
+            # refetched and that line no longer exists): show "Automatic".
+            if st.session_state.get(widget_key) not in keys:
+                st.session_state.pop(widget_key, None)
             index = keys.index(selected) if selected in keys else 0
-            # A selectbox rather than a radio: the list is now the whole
-            # roster's worth of props, which is the point, but too long to
-            # read as radio buttons.
-            choice = st.selectbox(
-                "Leg", options=keys, index=index,
-                key=f"override-pick-{row['team_id']}",
+
+            # The choice is written by a callback, not after the widget returns.
+            # Streamlit runs callbacks *before* rerunning the script, so the
+            # picks -- and the FanDuel link built from them, which render in the
+            # Parlay tab above this one -- see the new override on the same
+            # click. Writing it here instead left every override one click late.
+            st.selectbox(
+                "Leg", options=keys, index=index, key=widget_key,
                 format_func=lambda key, opts=dict(options): opts[key],
                 label_visibility="collapsed",
+                on_change=set_override, args=(row["team_id"], widget_key),
             )
-            if choice == "__auto__":
-                st.session_state.overrides.pop(row["team_id"], None)
-            else:
-                st.session_state.overrides[row["team_id"]] = choice
-            if not row["alternatives"]:
-                blocked = row["candidate_count"] - len(row["alternatives"])
-                st.caption(
-                    f"Nothing else on this roster is available. "
-                    f"{row['candidate_count']} prop(s) were scored for it"
-                    + (f"; {blocked} failed a filter — loosen the odds floor, "
-                       "the odds ceiling or a volume floor in the sidebar to "
-                       "see more." if blocked else ".")
-                )
+
+            passed = len(row["alternatives"])
+            if not row["override_options"]:
+                st.caption("Nothing else on this roster has a FanDuel prop posted.")
             else:
                 st.caption(
-                    f"{len(row['alternatives'])} of {row['candidate_count']} "
-                    "scored props on this roster passed the filters. A prop "
-                    "that is missing failed one — the odds ceiling and the "
-                    "volume floors are the usual reason."
+                    f"{passed} of {len(row['override_options'])} other props on this "
+                    "roster passed the filters; the rest are listed below them, "
+                    "marked ⛔ with what blocked them. Choosing one puts it on the "
+                    "slip anyway."
                 )
 
 

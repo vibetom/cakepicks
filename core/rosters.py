@@ -222,17 +222,48 @@ def filter_players(teams: list[dict], playing_teams: set[str], *,
                 "eligible": reason is None,
                 "exclusion_reason": reason,
                 "questionable": status in QUESTIONABLE_STATUSES,
+                "overridable": _overridable(player, playing_teams),
             })
         out.append({**team, "players": players})
     return out
 
 
-def roster_entries(teams: list[dict], eligible_only: bool = True) -> dict:
-    """Matcher entries: (fantasy_team_id, player_id) -> (name, nfl_team)."""
+def _overridable(player: dict, playing_teams: set[str]) -> bool:
+    """Whether a manual override may use this player at all.
+
+    The toggles -- starters only, exclude doubtful, exclude questionable --
+    are preferences about which legs the bot should pick for you, so a hand
+    override is allowed past them. What is left here are facts: a kicker has
+    no props, an OUT player is not playing, and a team with no game in the
+    window has nothing to bet on.
+
+    This has to be its own check rather than "ineligible for a toggle reason",
+    because filter_players records only the *first* reason in its chain. A
+    doubtful player on bye is labelled DOUBTFUL, so reading the label would let
+    an override reach a game outside the window.
+    """
+    if player.get("position", "?") in {"D/ST", "K", "HC", "P"}:
+        return False
+    if not player.get("nfl_team"):
+        return False
+    if player.get("injury_status", "ACTIVE") in HARD_OUT_STATUSES:
+        return False
+    return player["nfl_team"] in playing_teams
+
+
+def roster_entries(teams: list[dict], eligible_only: bool = True, *,
+                   include_overridable: bool = False) -> dict:
+    """Matcher entries: (fantasy_team_id, player_id) -> (name, nfl_team).
+
+    `include_overridable` adds players a toggle excluded but a manual override
+    may still use; their props are scored, marked, and never auto-picked.
+    """
     entries = {}
     for team in teams:
         for player in team["players"]:
-            if eligible_only and not player.get("eligible", True):
+            wanted = player.get("eligible", True) or (
+                include_overridable and player.get("overridable", False))
+            if eligible_only and not wanted:
                 continue
             key = (team["team_id"], player["player_id"])
             entries[key] = (player["name"], player.get("nfl_team"))

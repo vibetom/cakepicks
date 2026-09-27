@@ -154,6 +154,20 @@ def score_prop(prop: dict, projection: dict, config: dict) -> dict:
     return out
 
 
+def _exclude(scored: dict, code: str, text: str) -> None:
+    """Add one more blocking reason to an already-scored prop."""
+    codes = list(scored.get("exclusion_codes") or [])
+    if code not in codes:
+        codes.append(code)
+    details = dict(scored.get("exclusion_details") or {})
+    details[code] = text
+    scored["exclusion_codes"] = codes
+    scored["exclusion_details"] = details
+    scored["exclusion_reason"] = "; ".join(details.get(c, c) for c in codes)
+    scored["eligible"] = False
+    scored["review_only"] = False
+
+
 def score_props(*, events, raw_by_event, teams, projections, config,
                 aliases=None) -> dict:
     """Join odds -> rosters -> projections and score everything.
@@ -161,8 +175,10 @@ def score_props(*, events, raw_by_event, teams, projections, config,
     Returns a dict with the scored props grouped by fantasy team, plus
     diagnostics for names that could not be matched.
     """
+    # Players a toggle excluded are matched too: a manual override may use
+    # them. Their props are marked below and never auto-picked.
     roster_matcher = NameMatcher(
-        roster_entries(teams, eligible_only=True),
+        roster_entries(teams, include_overridable=True),
         aliases=aliases,
         threshold=float(config["fuzzy_threshold"]),
     )
@@ -172,7 +188,7 @@ def score_props(*, events, raw_by_event, teams, projections, config,
         threshold=float(config["fuzzy_threshold"]),
     )
     players = player_lookup(teams)
-    all_roster_entries = roster_entries(teams, eligible_only=True)
+    all_roster_entries = roster_entries(teams, include_overridable=True)
 
     scored_by_team: dict[object, list] = {team["team_id"]: [] for team in teams}
     unmatched_props: list[dict] = []
@@ -238,6 +254,9 @@ def score_props(*, events, raw_by_event, teams, projections, config,
                 })
             projection = row_to_projection(projections, projection_hit.key)
             scored = score_prop(prop, projection, config)
+            if not player.get("eligible", True):
+                _exclude(scored, "roster_toggle", player.get("exclusion_reason")
+                         or "excluded by a roster toggle")
             scored.update({
                 "fantasy_team_id": player["fantasy_team_id"],
                 "player_key": roster_hit.key,
@@ -378,6 +397,41 @@ def _rank_alternatives(eligible, pick):
     )
 
 
+def _override_options(candidates, pick, eligible):
+    """Every prop this slot could be overridden to, whatever blocked it.
+
+    An override is the user saying "this leg, no matter what", so the list is
+    every scored prop on the roster -- the ones the filters rejected included.
+    Props that passed come first so the usual choices are at the top; the rest
+    follow best-first, and anything with no score at all goes last.
+    """
+    passed = {p["prop_id"] for p in eligible}
+    others = [p for p in candidates if pick is None or p["prop_id"] != pick["prop_id"]]
+    first = sorted((p for p in others if p["prop_id"] in passed),
+                   key=_sort_key, reverse=True)
+    blocked = [p for p in others if p["prop_id"] not in passed]
+    scored_blocked = sorted((p for p in blocked if p.get("score") is not None),
+                            key=_sort_key, reverse=True)
+    unscored = [p for p in blocked if p.get("score") is None]
+    return first + scored_blocked + unscored
+
+
+def override_note(prop: dict, dropped=(), approved=()) -> str:
+    """Why a prop in the override list is not the automatic pick.
+
+    Empty for a prop that passed everything. The point is that choosing a
+    blocked prop is informed rather than surprising: the list says what the
+    override is overruling.
+    """
+    if prop["prop_id"] in dropped:
+        return "🔀 dropped by the same-team rule"
+    if prop.get("eligible") or (prop["prop_id"] in approved and can_approve(prop)):
+        return ""
+    details = prop.get("exclusion_details") or {}
+    codes = prop.get("exclusion_codes") or []
+    return "⛔ " + "; ".join(details.get(code, code) for code in codes)
+
+
 def _choose(eligible, config):
     """Apply the three-tier logic (§8) to one team's eligible props.
 
@@ -435,6 +489,9 @@ def select_picks(scored: dict, teams: list[dict], config: dict,
         review_cards = [
             p for p in candidates
             if p.get("needs_review") and p["prop_id"] not in approved_reviews
+            # A player a toggle excluded is only here so an override can reach
+            # him; a sanity card offering to "use this leg" would be a dead end.
+            and "roster_toggle" not in (p.get("exclusion_codes") or [])
         ]
 
         pick = None
@@ -453,6 +510,10 @@ def select_picks(scored: dict, teams: list[dict], config: dict,
 
         if pick is not None:
             used_players.add(pick["player_key"])
+            # A leg already on the slip -- typically one chosen by hand past
+            # the sanity ceiling -- has nothing left to review.
+            review_cards = [c for c in review_cards
+                            if c["prop_id"] != pick["prop_id"]]
 
         # A leg that only got in because the user approved it past a filter has
         # to say so wherever it appears, or the filter looks like it silently
@@ -468,6 +529,7 @@ def select_picks(scored: dict, teams: list[dict], config: dict,
             pick, tier, manual, best_gap, best_ev, config)
 
         alternatives = _rank_alternatives(eligible, pick)
+        override_options = _override_options(candidates, pick, eligible)
 
         results.append({
             "team_id": team_id,
@@ -477,6 +539,7 @@ def select_picks(scored: dict, teams: list[dict], config: dict,
             "tier": tier,
             "manual": manual,
             "alternatives": alternatives,
+            "override_options": override_options,
             "why": why_short,
             "why_detail": why_detail,
             "review_cards": review_cards,
@@ -553,8 +616,9 @@ def _refill(row, candidates, config, approved_reviews, used_players, banned):
     )
     row["why"], row["why_detail"] = explain_pick(
         pick, tier, False, best_gap, best_ev, config)
-    row["alternatives"] = _rank_alternatives(
-        _eligible_props(candidates, approved_reviews, used_players), pick)
+    offerable = _eligible_props(candidates, approved_reviews, used_players)
+    row["alternatives"] = _rank_alternatives(offerable, pick)
+    row["override_options"] = _override_options(candidates, pick, offerable)
     row["conflict_dropped"] = sorted(banned)
     return pick
 
@@ -710,6 +774,8 @@ def _none_reason(team: dict, candidates: list[dict], config: dict) -> str:
         parts.append("EV props are off")
     if counts.get("market_off"):
         parts.append(f"{counts['market_off']} in markets you've unchecked")
+    if counts.get("roster_toggle"):
+        parts.append(f"{counts['roster_toggle']} for players a roster toggle excludes")
     if not parts:
         return "no prop passed the filters"
     return "no prop passed the filters (" + ", ".join(parts) + ")"

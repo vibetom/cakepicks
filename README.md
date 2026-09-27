@@ -287,6 +287,22 @@ Three things worth knowing:
   `🔀 dropped by the same-team rule`. Choosing it by hand overrules the clash —
   the other leg moves instead.
 
+### Overrides
+
+*Override a pick* on the Review tab lists **every** prop on each roster, not
+just the ones that passed. A leg you choose there goes on the slip **no matter
+what** — the odds floor and ceiling, volume floors, the sanity ceiling,
+unticked markets, EV off, the same-team rule, and the Doubtful / Questionable /
+Starters-only toggles are all ignored for it. Blocked props are listed after
+the ones that passed, each marked `⛔` with what it is overruling, and a manual
+leg shows `✋ manual (past filters)` in the Parlay table.
+
+The one thing an override can't reach is a player with **nothing to bet on**:
+OUT / IR / suspended, or a team with no game in your date window. Those props
+aren't in the list.
+
+The parlay and the FanDuel link update **on the same click** as the override.
+
 Turn the whole thing off with **Avoid same-team clashes** under *Toggles*.
 
 ### Why you may see a lot of NONE at first
