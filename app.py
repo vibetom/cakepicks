@@ -1047,7 +1047,11 @@ with tab_review:
         st.caption("No props tripped the sanity ceiling.")
 
     st.subheader("Override a pick")
-    st.caption("Each team's top 5 alternatives from the props that passed every filter.")
+    st.caption(
+        "Every prop on each roster that passed the filters — not just the top "
+        "few. A leg the same-team rule dropped stays on this list: choosing it "
+        "by hand overrules that rule."
+    )
     for row in picks:
         current = row.get("pick")
         header = (f"{row['team_name']} — "
@@ -1059,12 +1063,15 @@ with tab_review:
             elif row.get("why_detail"):
                 st.info(row["why_detail"])
             options = [("__auto__", "Automatic pick")]
+            dropped = set(row.get("conflict_dropped") or [])
             for alt in row["alternatives"]:
-                options.append((
-                    alt["prop_id"],
+                label = (
                     f"{alt.get('player_name_espn')} · {parlay_mod.describe_prop(alt)} · "
-                    f"{scoring.format_american(alt['price'])} · {parlay_mod.score_text(alt)}",
-                ))
+                    f"{scoring.format_american(alt['price'])} · {parlay_mod.score_text(alt)}"
+                )
+                if alt["prop_id"] in dropped:
+                    label += "  🔀 dropped by the same-team rule"
+                options.append((alt["prop_id"], label))
             if current and row.get("manual"):
                 options.insert(1, (current["prop_id"],
                                    f"(current) {current.get('player_name_espn')} · "
@@ -1072,8 +1079,12 @@ with tab_review:
             selected = st.session_state.overrides.get(row["team_id"], "__auto__")
             keys = [key for key, _ in options]
             index = keys.index(selected) if selected in keys else 0
-            choice = st.radio(
-                "Leg", options=keys, index=index, key=f"override-{row['team_id']}",
+            # A selectbox rather than a radio: the list is now the whole
+            # roster's worth of props, which is the point, but too long to
+            # read as radio buttons.
+            choice = st.selectbox(
+                "Leg", options=keys, index=index,
+                key=f"override-pick-{row['team_id']}",
                 format_func=lambda key, opts=dict(options): opts[key],
                 label_visibility="collapsed",
             )
@@ -1081,9 +1092,22 @@ with tab_review:
                 st.session_state.overrides.pop(row["team_id"], None)
             else:
                 st.session_state.overrides[row["team_id"]] = choice
-            if len(row["alternatives"]) == 0:
-                st.caption(f"No alternatives passed the filters "
-                           f"({row['candidate_count']} props scored for this roster).")
+            if not row["alternatives"]:
+                blocked = row["candidate_count"] - len(row["alternatives"])
+                st.caption(
+                    f"Nothing else on this roster is available. "
+                    f"{row['candidate_count']} prop(s) were scored for it"
+                    + (f"; {blocked} failed a filter — loosen the odds floor, "
+                       "the odds ceiling or a volume floor in the sidebar to "
+                       "see more." if blocked else ".")
+                )
+            else:
+                st.caption(
+                    f"{len(row['alternatives'])} of {row['candidate_count']} "
+                    "scored props on this roster passed the filters. A prop "
+                    "that is missing failed one — the odds ceiling and the "
+                    "volume floors are the usual reason."
+                )
 
 
 # --------------------------------------------------------------------------

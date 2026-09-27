@@ -490,3 +490,78 @@ class TestCrossKindResolution:
         picks = select_picks(scored, teams, config, overrides={1: prop_id(gap)})
         assert picks[0]["pick"]["player_name"] == "Chase"
         assert picks[1]["pick"]["player_name"] == "Spare"
+
+
+class TestTheDroppedLegStaysOverridable:
+    """Resolving a clash must not remove the user's ability to undo it.
+
+    The ban list exists to stop the automatic re-pick choosing the same prop
+    again. It leaked into the override list, so a leg the clash rule dropped
+    vanished from the only control that could put it back -- and a hand-picked
+    leg is explicitly exempt from the clash rule, so it should always have been
+    offerable.
+    """
+
+    @staticmethod
+    def clashing_slate():
+        return slate(
+            [prop("player_reception_yds", team="TB", score=0.30, player="Evans")],
+            [prop("player_reception_yds", team="TB", score=0.20, player="Godwin"),
+             prop("player_rush_yds", team="NE", score=0.06, player="Gainwell")],
+        )
+
+    def test_the_dropped_leg_is_still_offered(self, config):
+        coop = select_picks(*self.clashing_slate(), config)[1]
+        assert coop["pick"]["player_name"] == "Gainwell"
+        assert "Godwin" in [a["player_name"] for a in coop["alternatives"]]
+
+    def test_it_is_marked_so_the_label_can_explain_itself(self, config):
+        coop = select_picks(*self.clashing_slate(), config)[1]
+        godwin = next(a for a in coop["alternatives"]
+                      if a["player_name"] == "Godwin")
+        assert godwin["prop_id"] in coop["conflict_dropped"]
+
+    def test_choosing_it_by_hand_overrules_the_clash_rule(self, config):
+        from core.selection import prop_id
+
+        # Team 1 gets a spare, so the clash has somewhere to go once Godwin
+        # is pinned: a hand-picked leg is never the one that moves.
+        scored, teams = slate(
+            [prop("player_reception_yds", team="TB", score=0.30, player="Evans"),
+             prop("player_rush_yds", team="NE", score=0.04, player="Spare")],
+            [prop("player_reception_yds", team="TB", score=0.20, player="Godwin"),
+             prop("player_rush_yds", team="NE", score=0.06, player="Gainwell")],
+        )
+        godwin = next(p for p in scored["by_team"][2]
+                      if p["player_name"] == "Godwin")
+        picks = select_picks(scored, teams, config,
+                             overrides={2: prop_id(godwin)})
+        assert picks[1]["pick"]["player_name"] == "Godwin"   # the pinned leg
+        assert picks[0]["pick"]["player_name"] == "Spare"    # the other moved
+
+    def test_a_slot_emptied_by_a_clash_still_offers_its_props(self, config):
+        """The worst case: no automatic pick left, and nothing to choose."""
+        scored, teams = slate(
+            [prop("player_reception_yds", team="TB", score=0.30, player="Evans")],
+            [prop("player_reception_yds", team="TB", score=0.20, player="Godwin")],
+        )
+        coop = select_picks(scored, teams, config)[1]
+        assert coop["pick"] is None
+        assert [a["player_name"] for a in coop["alternatives"]] == ["Godwin"]
+
+
+class TestAlternativesAreNotTruncated:
+    """The override list is the only reader, so a cap just hides legs."""
+
+    def test_every_passing_prop_is_offered(self, config):
+        roster = [prop("player_reception_yds", team=f"T{i}", score=0.30 - i / 100,
+                       player=f"Player {i}") for i in range(9)]
+        picks = select_picks(*slate(roster), config)
+        assert len(picks[0]["alternatives"]) == 8      # all but the pick itself
+
+    def test_they_are_ordered_best_first(self, config):
+        roster = [prop("player_reception_yds", team=f"T{i}", score=0.30 - i / 100,
+                       player=f"Player {i}") for i in range(9)]
+        picks = select_picks(*slate(roster), config)
+        scores = [a["score"] for a in picks[0]["alternatives"]]
+        assert scores == sorted(scores, reverse=True)

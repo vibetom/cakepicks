@@ -283,6 +283,9 @@ Three things worth knowing:
 - **A slot can end up NONE** if the fantasy team has nothing else that
   qualifies. That is much more likely on a thin slate, where most rostered
   players come from a handful of games.
+- **A dropped leg stays available under *Override a pick*,** marked
+  `🔀 dropped by the same-team rule`. Choosing it by hand overrules the clash —
+  the other leg moves instead.
 
 Turn the whole thing off with **Avoid same-team clashes** under *Toggles*.
 

@@ -365,6 +365,19 @@ def _eligible_props(candidates, approved_reviews, used_players, banned=()):
     ]
 
 
+def _rank_alternatives(eligible, pick):
+    """Everything this slot could play instead, best first.
+
+    Read only by the manual-override list, so it is deliberately uncapped: a
+    truncated list is indistinguishable from a filter refusing the leg the user
+    is looking for.
+    """
+    return sorted(
+        (p for p in eligible if pick is None or p["prop_id"] != pick["prop_id"]),
+        key=_sort_key, reverse=True,
+    )
+
+
 def _choose(eligible, config):
     """Apply the three-tier logic (§8) to one team's eligible props.
 
@@ -454,10 +467,7 @@ def select_picks(scored: dict, teams: list[dict], config: dict,
         why_short, why_detail = explain_pick(
             pick, tier, manual, best_gap, best_ev, config)
 
-        alternatives = sorted(
-            (p for p in eligible if pick is None or p["prop_id"] != pick["prop_id"]),
-            key=_sort_key, reverse=True,
-        )[:5]
+        alternatives = _rank_alternatives(eligible, pick)
 
         results.append({
             "team_id": team_id,
@@ -476,6 +486,7 @@ def select_picks(scored: dict, teams: list[dict], config: dict,
             # A list: one slot can be hit more than once, and overwriting the
             # note would hide the earlier swap that led to the later one.
             "conflict_notes": [],
+            "conflict_dropped": [],
         })
 
     if config.get("avoid_team_conflicts", True):
@@ -522,7 +533,13 @@ def _weaker(left: dict, right: dict, config: dict):
 
 
 def _refill(row, candidates, config, approved_reviews, used_players, banned):
-    """Re-pick one slot after its leg was dropped, using the same tier logic."""
+    """Re-pick one slot after its leg was dropped, using the same tier logic.
+
+    The ban list steers the automatic re-pick only. A hand-picked leg is exempt
+    from the clash rule, so the leg that was just dropped has to stay on offer
+    in the override list -- otherwise resolving a clash quietly removes the
+    user's ability to put it back.
+    """
     eligible = _eligible_props(candidates, approved_reviews, used_players, banned)
     pick, tier, best_gap, best_ev = _choose(eligible, config)
 
@@ -536,10 +553,9 @@ def _refill(row, candidates, config, approved_reviews, used_players, banned):
     )
     row["why"], row["why_detail"] = explain_pick(
         pick, tier, False, best_gap, best_ev, config)
-    row["alternatives"] = sorted(
-        (p for p in eligible if pick is None or p["prop_id"] != pick["prop_id"]),
-        key=_sort_key, reverse=True,
-    )[:5]
+    row["alternatives"] = _rank_alternatives(
+        _eligible_props(candidates, approved_reviews, used_players), pick)
+    row["conflict_dropped"] = sorted(banned)
     return pick
 
 
