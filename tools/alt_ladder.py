@@ -33,18 +33,15 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from core.betslip import build_parlay_url, leg_ids  # noqa: E402  (stdlib-only module)
+from core.betslip import build_parlay_url, leg_ids  # noqa: E402  (stdlib-only modules)
+from core.ladder import ladder, to_win  # noqa: E402
+from core.ladder import MARKETS as LADDER_MARKETS  # noqa: E402
 
 API = "https://api.the-odds-api.com/v4"
 SPORT = "americanfootball_nfl"
 
-#: Standard line first, so it wins when both markets post the same number.
-MARKETS = {
-    "receiving-yards": ["player_reception_yds", "player_reception_yds_alternate"],
-    "rushing-yards": ["player_rush_yds", "player_rush_yds_alternate"],
-    "passing-yards": ["player_pass_yds", "player_pass_yds_alternate"],
-    "receptions": ["player_receptions", "player_receptions_alternate"],
-}
+#: CLI slugs for the shared stat names.
+MARKETS = {name.lower().replace(" ", "-"): keys for name, keys in LADDER_MARKETS.items()}
 
 
 def get(path: str, params: dict) -> tuple[object, dict]:
@@ -67,35 +64,6 @@ def find_event(key: str, team: str) -> dict:
     if not hits:
         sys.exit(f"No upcoming game matches {team!r}.")
     return hits[0]
-
-
-def ladder(payload: dict, player: str, markets: list[str]) -> list[dict]:
-    """Every Over for `player` across `markets`, one per line, lowest first."""
-    wanted = player.lower().split()
-    by_line: dict = {}
-    for book in payload.get("bookmakers") or []:
-        for market in book.get("markets") or []:
-            if market.get("key") not in markets:
-                continue
-            for outcome in market.get("outcomes") or []:
-                name = (outcome.get("description") or "").lower()
-                if outcome.get("name") != "Over" or not all(t in name for t in wanted):
-                    continue
-                leg = {
-                    "line": outcome.get("point"),
-                    "price": outcome.get("price"),
-                    "market": market["key"],
-                    "market_sid": market.get("sid"),
-                    "sid": outcome.get("sid"),
-                    "outcome_link": outcome.get("link"),
-                    "player": outcome.get("description"),
-                }
-                previous = by_line.get(leg["line"])
-                # Same number in both markets: keep the standard line's IDs.
-                if previous is None or (markets.index(leg["market"])
-                                        < markets.index(previous["market"])):
-                    by_line[leg["line"]] = leg
-    return sorted(by_line.values(), key=lambda leg: leg["line"] or 0)
 
 
 def fmt(price) -> str:
@@ -136,11 +104,10 @@ def main() -> None:
     print(f"{legs[0]['player']} — {args.stat.replace('-', ' ')}, every Over FanDuel offers:\n")
     usable = [leg for leg in legs if leg_ids(leg)]
     for leg in legs:
-        to_win = args.stake * ((leg["price"] / 100) if leg["price"] > 0
-                               else (100 / abs(leg["price"])))
+        wins = to_win(args.stake, leg["price"])
         flag = "" if leg_ids(leg) else "   (no betslip ID — add by hand)"
         print(f"  Over {leg['line']:<6g} {fmt(leg['price']):>6}   "
-              f"${args.stake:.0f} wins ${to_win:,.2f}{flag}")
+              f"${args.stake:.0f} wins ${wins:,.2f}{flag}")
 
     print(f"\n{len(legs)} bets × ${args.stake:.0f} = ${len(legs) * args.stake:,.0f} total.\n")
     url = build_parlay_url(usable)

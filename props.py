@@ -19,12 +19,13 @@ from dotenv import load_dotenv
 
 from core import board as board_mod
 from core import gate as gate_mod
+from core import ladder as ladder_mod
 from core import odds as odds_mod
 from core import pickem as pickem_mod
 from core import scoring
 from core import slip as slip_mod
 from core import snapshots
-from core.betslip import leg_link
+from core.betslip import build_parlay_url, leg_ids, leg_link
 from core.config import CEILING_TICKS, ODDS_TICKS
 from core.matching import AliasStore
 from core.projections import ProjectionError, load_projections
@@ -315,6 +316,122 @@ if not store.persistent:
         "odds. Set `GITHUB_TOKEN` and `GITHUB_REPO` in this app's secrets — the "
         "same values — and both apps share one snapshot."
     )
+
+# --------------------------------------------------------------------------
+# Alt-line ladder — every Over for one player, as one FanDuel link
+# --------------------------------------------------------------------------
+# Placed before the "need odds and projections" stop: it needs neither, only
+# the API key, so it works on a day nothing else has been loaded.
+
+@st.cache_data(ttl=900, show_spinner=False)
+def upcoming_games(key: str) -> list[dict]:
+    """This week's games that haven't started. The events call costs 0 credits."""
+    now = dt.datetime.now(dt.timezone.utc)
+    games = odds_mod.TheOddsAPI(key).get_week_events(now, now + dt.timedelta(days=8))
+    return sorted(odds_mod.filter_events(games, now, now + dt.timedelta(days=8)),
+                  key=lambda g: g["commence_time"])
+
+
+def render_ladder() -> None:
+    if not api_key:
+        st.info("Add `ODDS_API_KEY` to this app's secrets to use the ladder.")
+        return
+    try:
+        games = upcoming_games(api_key)
+    except odds_mod.OddsError as exc:
+        st.error(f"Couldn't load this week's games: {exc}")
+        return
+    if not games:
+        st.info("No upcoming NFL games found this week.")
+        return
+
+    pick_cols = st.columns([3, 2])
+    game = pick_cols[0].selectbox(
+        "Game", games, key="ladder_game",
+        format_func=lambda g: f"{g.get('away_team')} @ {g.get('home_team')} · "
+                              f"{board_mod._kickoff(g)}")
+    stat = pick_cols[1].selectbox("Stat", list(ladder_mod.MARKETS), key="ladder_stat")
+    markets = ladder_mod.MARKETS[stat]
+
+    stored = st.session_state.get("ladder_data")
+    current = bool(stored and stored["event_id"] == game["id"] and stored["stat"] == stat)
+    if st.button(
+        "🔄 Refresh FanDuel lines" if current else "📥 Get FanDuel lines for this game",
+        help=f"About {len(markets)} credits: the standard and alternate {stat.lower()} "
+             "markets for this one game.",
+    ):
+        try:
+            provider = odds_mod.TheOddsAPI(api_key)
+            payload = provider.get_event_props(game["id"], markets)
+        except odds_mod.OddsError as exc:
+            st.error(f"Odds API: {exc}")
+            return
+        st.session_state.ladder_data = stored = {
+            "event_id": game["id"], "stat": stat, "payload": payload,
+            "fetched_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        }
+        st.session_state.quota = provider.quota
+        current = True
+    if not current:
+        return
+
+    names = ladder_mod.players(stored["payload"], markets)
+    st.caption(f"Lines fetched {age(stored['fetched_at'])}.")
+    if not names:
+        st.warning(
+            f"FanDuel hasn't posted any {stat.lower()} lines for this game yet. "
+            "Player props often go up only on game day — try again closer to "
+            "kickoff."
+        )
+        return
+
+    who_cols = st.columns([3, 1])
+    player = who_cols[0].selectbox(
+        "Player", names, index=None, key="ladder_player",
+        placeholder="Type a name…")
+    stake = who_cols[1].number_input("Stake per line ($)", min_value=1.0,
+                                     value=5.0, step=1.0, key="ladder_stake")
+    if not player:
+        return
+
+    legs = ladder_mod.ladder(stored["payload"], player, markets)
+    usable = [leg for leg in legs if leg_ids(leg)]
+    st.dataframe(pd.DataFrame([{
+        "Over": leg["line"],
+        "Price": scoring.format_american(leg["price"]),
+        f"${stake:,.0f} wins": round(ladder_mod.to_win(stake, leg["price"]), 2),
+        "Bet": leg.get("outcome_link") or "",
+    } for leg in legs]), hide_index=True, width="stretch", column_config={
+        "Over": st.column_config.NumberColumn(format="%.1f"),
+        f"${stake:,.0f} wins": st.column_config.NumberColumn(format="$%.2f"),
+        "Bet": st.column_config.LinkColumn("Just this one", display_text="Add"),
+    })
+    # "$" must be escaped: Streamlit's markdown reads a bare pair as LaTeX.
+    st.markdown(f"**{len(legs)} bets × \\${stake:,.0f} = "
+                f"\\${len(legs) * stake:,.0f} total.**")
+
+    url = build_parlay_url(usable)
+    if url:
+        st.link_button(f"🔗 Open all {len(usable)} on FanDuel", url, type="primary")
+        st.caption("Or copy the link to send to someone:")
+        st.code(url, language=None)
+    if len(usable) < len(legs):
+        st.warning(f"{len(legs) - len(usable)} line(s) came without FanDuel's IDs, "
+                   "so they're not in the link — add those by hand.")
+    st.caption(
+        "On the slip, choose **singles**, not a parlay — FanDuel won't combine "
+        "lines on the same player and stat — and type the stake on each line. "
+        "A link can't carry a stake. If the one link only loads some lines, use "
+        "the **Add** links in the table; each one adds to the same slip."
+    )
+
+
+if st.toggle("🪜 Alt-line ladder — every Over for one player, as one FanDuel link",
+             key="ladder_open"):
+    with st.container(border=True):
+        render_ladder()
+    st.divider()
+
 
 if not st.session_state.raw_by_event or st.session_state.projections is None:
     missing = []
